@@ -3,8 +3,26 @@
      data-controller="__plugin/showhealthjs">
     <div data-role="content">
         <div class="content-primary">
-            <h1 style="margin-bottom: 1em;">Show Health</h1>
-            <p id="showHealthStatus">Hello World</p>
+
+            <!-- Header -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1em;">
+                <h1>Show Health</h1>
+                <span id="showHealthSummary" style="color:#888;font-size:0.9em;"></span>
+            </div>
+
+            <!-- Sort bar -->
+            <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;">
+                <button is="emby-button" class="raised" data-sort="status" style="font-size:0.85em;">By Status</button>
+                <button is="emby-button" class="raised" data-sort="urgency" style="font-size:0.85em;">By Urgency</button>
+                <button is="emby-button" class="raised" data-sort="name" style="font-size:0.85em;">A-Z</button>
+            </div>
+
+            <!-- Error message -->
+            <div id="showHealthError" style="display:none;padding:1em;background:#3a1a1a;border-radius:4px;margin-bottom:1em;color:#e5383b;"></div>
+
+            <!-- Table -->
+            <div id="showHealthTableContainer"></div>
+
         </div>
     </div>
 </div>
