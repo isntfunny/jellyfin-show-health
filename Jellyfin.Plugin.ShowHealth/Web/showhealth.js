@@ -29,6 +29,11 @@ class ShowHealthApi {
         var url = this._apiClient.getUrl('/ShowHealth/Analyze/' + imdbId);
         return await this._apiClient.getJSON(url);
     }
+
+    async clearCache() {
+        var url = this._apiClient.getUrl('/ShowHealth/ClearCache');
+        await this._apiClient.ajax({ type: 'POST', url: url });
+    }
 }
 
 class ShowHealthSorter {
@@ -478,6 +483,7 @@ class ShowHealthPage {
     async init() {
         this._bindSortButtons();
         this._bindHideComplete();
+        this._bindClearCache();
         this._updateSortButtonState();
         this._setSortButtonsEnabled(false);
         await this._loadData();
@@ -521,6 +527,35 @@ class ShowHealthPage {
         }
     }
 
+    _bindClearCache() {
+        var self = this;
+        var btn = this._view.querySelector('#showHealthClearCache');
+        if (btn) {
+            this._clearCacheHandler = async function () {
+                btn.disabled = true;
+                btn.textContent = 'Clearing...';
+                try {
+                    await self._api.clearCache();
+                    Dashboard.alert('Cache cleared — reloading data...');
+                    // Reset state and reload
+                    self._seriesList = [];
+                    self._analysisResults = {};
+                    self._data = null;
+                    self._indexingComplete = false;
+                    self._setSortButtonsEnabled(false);
+                    await self._loadData();
+                } catch (err) {
+                    Dashboard.alert('Failed to clear cache: ' + (err.message || err));
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Clear Cache';
+                }
+            };
+            btn.addEventListener('click', this._clearCacheHandler);
+            this._clearCacheBtn = btn;
+        }
+    }
+
     destroy() {
         if (this._sortHandlers) {
             for (var i = 0; i < this._sortHandlers.length; i++) {
@@ -531,6 +566,9 @@ class ShowHealthPage {
         }
         if (this._hideCompleteCheckbox && this._hideCompleteHandler) {
             this._hideCompleteCheckbox.removeEventListener('change', this._hideCompleteHandler);
+        }
+        if (this._clearCacheBtn && this._clearCacheHandler) {
+            this._clearCacheBtn.removeEventListener('click', this._clearCacheHandler);
         }
     }
 
