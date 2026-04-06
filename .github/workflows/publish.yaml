@@ -1,18 +1,103 @@
-name: '🚀 Publish Plugin'
+name: Publish Plugin
 
 on:
   release:
-    types:
-      - released
+    types: [released]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  call:
-    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/publish.yaml@master
-    with:
-      version: ${{ github.event.release.tag_name }}
-      is-unstable: ${{ github.event.release.prerelease }}
-    secrets:
-      deploy-host: ${{ secrets.DEPLOY_HOST }}
-      deploy-user: ${{ secrets.DEPLOY_USER }}
-      deploy-key: ${{ secrets.DEPLOY_KEY }}
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build Plugin with JPRM
+        uses: oddstr13/jellyfin-plugin-repository-manager@v1.1.1
+        id: jprm
+        with:
+          dotnet-target: "net9.0"
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Prepare release artifact
+        id: artifact
+        run: |
+          ARTIFACT="${{ steps.jprm.outputs.artifact }}"
+          BASENAME="show-health_${{ steps.version.outputs.version }}.zip"
+          cp "$ARTIFACT" "$BASENAME"
+          MD5=$(md5sum "$BASENAME" | awk '{print $1}')
+          echo "filename=${BASENAME}" >> $GITHUB_OUTPUT
+          echo "checksum=${MD5}" >> $GITHUB_OUTPUT
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ steps.artifact.outputs.filename }}"
+
+      - name: Update manifest.json
+        run: |
+          python3 << 'PYEOF'
+          import json, os, subprocess
+
+          version = "${{ steps.version.outputs.version }}"
+          checksum = "${{ steps.artifact.outputs.checksum }}"
+          tag = "${{ github.event.release.tag_name }}"
+          timestamp = subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"]).decode().strip()
+          repo = "${{ github.repository }}"
+
+          manifest_path = "manifest.json"
+          if os.path.exists(manifest_path):
+              with open(manifest_path) as f:
+                  manifest = json.load(f)
+          else:
+              manifest = []
+
+          if len(manifest) == 0:
+              manifest.append({
+                  "guid": "2626c821-e54b-488a-b316-ea9c5f95e24f",
+                  "name": "Show Health",
+                  "description": "Checks TV series libraries for completeness and reports missing episodes, seasons, and series status.",
+                  "overview": "TV series completeness checker",
+                  "owner": "IsntFunny",
+                  "category": "General",
+                  "imageUrl": "",
+                  "versions": []
+              })
+
+          new_version = {
+              "version": version,
+              "changelog": "See GitHub release notes",
+              "targetAbi": "10.11.0.0",
+              "sourceUrl": f"https://github.com/{repo}/releases/download/{tag}/show-health_{version}.zip",
+              "checksum": checksum,
+              "timestamp": timestamp
+          }
+
+          manifest[0]["versions"].insert(0, new_version)
+
+          with open(manifest_path, "w") as f:
+              json.dump(manifest, f, indent=4)
+          PYEOF
+
+      - name: Commit and push manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "chore: update manifest for ${{ github.event.release.tag_name }}" || true
+          git push
