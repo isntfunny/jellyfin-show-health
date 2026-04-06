@@ -35,6 +35,16 @@ public class ShowHealthAnalyzer
     }
 
     /// <summary>
+    /// Clears all IMDb API cache entries.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task ClearCacheAsync(CancellationToken cancellationToken = default)
+    {
+        await _imdbClient.ClearCacheAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("IMDb cache cleared");
+    }
+
+    /// <summary>
     /// Returns a list of all series with IMDb IDs from Jellyfin (no IMDb calls).
     /// </summary>
     public SeriesListResponse GetSeriesList()
@@ -128,13 +138,14 @@ public class ShowHealthAnalyzer
     {
         var imdbId = series.ImdbId!;
 
-        // Fetch IMDb data (title + seasons in parallel)
-        var titleTask = _imdbClient.GetTitleAsync(imdbId, cancellationToken);
-        var seasonsTask = _imdbClient.ListTitleSeasonsAsync(imdbId, cancellationToken);
-        await Task.WhenAll(titleTask, seasonsTask).ConfigureAwait(false);
+        // Fetch title first to determine ended status, which drives the cache TTL for all subsequent calls.
+        var title = await _imdbClient.GetTitleAsync(imdbId, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var title = await titleTask.ConfigureAwait(false);
-        var imdbSeasons = await seasonsTask.ConfigureAwait(false);
+        // Ended series data is immutable — cache for 365 days; running series use the default 7-day TTL.
+        var isLikelyEnded = title != null && title.EndYear > 0;
+        var dataTtl = isLikelyEnded ? TimeSpan.FromDays(365) : (TimeSpan?)null;
+
+        var imdbSeasons = await _imdbClient.ListTitleSeasonsAsync(imdbId, cacheTtl: dataTtl, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Load ALL local episodes in one query (Fix 3: avoids N+1 per season)
         var allLocalEpisodesBySeason = _libraryService.GetAllEpisodesForSeries(series.Id);
@@ -179,7 +190,7 @@ public class ShowHealthAnalyzer
         foreach (var seasonNum in imdbSeasonNumbers)
         {
             // Fix 1: paginate through all episodes for this season
-            var imdbEpisodes = await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, cancellationToken).ConfigureAwait(false);
+            var imdbEpisodes = await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, dataTtl, cancellationToken).ConfigureAwait(false);
 
             // Check for next upcoming episode (across all seasons)
             foreach (var ep in imdbEpisodes)
@@ -308,6 +319,7 @@ public class ShowHealthAnalyzer
     private async Task<List<Episode>> GetAllEpisodesForSeasonAsync(
         string imdbId,
         int seasonNum,
+        TimeSpan? cacheTtl,
         CancellationToken cancellationToken)
     {
         var allEpisodes = new List<Episode>();
@@ -320,6 +332,7 @@ public class ShowHealthAnalyzer
                 season: seasonNum.ToString(CultureInfo.InvariantCulture),
                 pageSize: 50,
                 pageToken: pageToken,
+                cacheTtl: cacheTtl,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             allEpisodes.AddRange(response.Episodes);

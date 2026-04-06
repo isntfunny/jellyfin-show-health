@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.ShowHealth.Models;
 using Jellyfin.Plugin.ShowHealth.Services;
+using MediaBrowser.Controller;
 using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -12,11 +17,19 @@ namespace Jellyfin.Plugin.ShowHealth.Tasks;
 
 /// <summary>
 /// Scheduled task that periodically scans the library for missing episodes.
+/// Compares with previous scan results and only notifies about NEW missing content.
+/// First run ever does NOT fire notifications (baseline scan).
 /// </summary>
 public class ShowHealthScanTask : IScheduledTask
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = false,
+    };
+
     private readonly ShowHealthAnalyzer _analyzer;
     private readonly IActivityManager _activityManager;
+    private readonly IServerApplicationPaths _appPaths;
     private readonly ILogger<ShowHealthScanTask> _logger;
 
     /// <summary>
@@ -25,10 +38,12 @@ public class ShowHealthScanTask : IScheduledTask
     public ShowHealthScanTask(
         ShowHealthAnalyzer analyzer,
         IActivityManager activityManager,
+        IServerApplicationPaths appPaths,
         ILogger<ShowHealthScanTask> logger)
     {
         _analyzer = analyzer;
         _activityManager = activityManager;
+        _appPaths = appPaths;
         _logger = logger;
     }
 
@@ -51,36 +66,58 @@ public class ShowHealthScanTask : IScheduledTask
         progress.Report(0);
 
         var result = await _analyzer.AnalyzeAsync(cancellationToken).ConfigureAwait(false);
+        progress.Report(90);
 
-        progress.Report(100);
+        var scanFilePath = GetScanFilePath();
+        var previousSnapshot = await LoadPreviousSnapshotAsync(scanFilePath).ConfigureAwait(false);
+        var isFirstRun = previousSnapshot == null;
 
-        var totalMissing = result.Summary.Incomplete;
-        var totalEpisodes = 0;
-        foreach (var series in result.Series)
-        {
-            totalEpisodes += series.MissingEpisodes.Count;
-        }
+        // Build current snapshot: set of "SeriesName|SxxExx" strings for quick diff
+        var currentSnapshot = BuildSnapshot(result);
 
-        if (totalMissing > 0)
+        // Save current snapshot for next run
+        await SaveSnapshotAsync(scanFilePath, currentSnapshot).ConfigureAwait(false);
+
+        progress.Report(95);
+
+        if (isFirstRun)
         {
             _logger.LogInformation(
-                "Show Health scan complete: {Incomplete}/{Total} series incomplete, {MissingEpisodes} episodes missing",
-                totalMissing,
+                "Show Health first scan complete (baseline): {Total} series, {Incomplete} incomplete. No notification on first run.",
                 result.Summary.Total,
-                totalEpisodes);
-
-            await _activityManager.CreateAsync(new ActivityLog(
-                "Show Health Scan",
-                "ShowHealthScan",
-                Guid.Empty)
-            {
-                Overview = $"{totalMissing} series incomplete, {totalEpisodes} episodes missing",
-            }).ConfigureAwait(false);
+                result.Summary.Incomplete);
         }
         else
         {
-            _logger.LogInformation("Show Health scan complete: all {Total} series are complete", result.Summary.Total);
+            // Find NEW missing items (in current but not in previous)
+            var newMissing = currentSnapshot.Except(previousSnapshot!).ToList();
+
+            if (newMissing.Count > 0)
+            {
+                var summary = FormatNotificationSummary(newMissing);
+
+                _logger.LogInformation(
+                    "Show Health scan: {Count} new missing items detected",
+                    newMissing.Count);
+
+                await _activityManager.CreateAsync(new ActivityLog(
+                    "Show Health: new missing content detected",
+                    "ShowHealthScan",
+                    Guid.Empty)
+                {
+                    Overview = summary,
+                }).ConfigureAwait(false);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Show Health scan complete: no new missing items. {Total} series, {Incomplete} incomplete.",
+                    result.Summary.Total,
+                    result.Summary.Incomplete);
+            }
         }
+
+        progress.Report(100);
     }
 
     /// <inheritdoc />
@@ -94,5 +131,105 @@ public class ShowHealthScanTask : IScheduledTask
                 IntervalTicks = TimeSpan.FromHours(24).Ticks,
             },
         ];
+    }
+
+    private static HashSet<string> BuildSnapshot(ShowHealthResponse result)
+    {
+        var snapshot = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var series in result.Series)
+        {
+            // Missing seasons as "SeriesName|S01 complete"
+            foreach (var ms in series.MissingSeasons)
+            {
+                snapshot.Add($"{series.Name}|S{ms.Season:D2} complete ({ms.EpisodeCount} ep)");
+            }
+
+            // Missing episodes as "SeriesName|S01E03"
+            foreach (var ep in series.MissingEpisodes)
+            {
+                snapshot.Add($"{series.Name}|S{ep.Season:D2}E{ep.Episode:D2}");
+            }
+        }
+
+        return snapshot;
+    }
+
+    private static string FormatNotificationSummary(List<string> newMissing)
+    {
+        // Group by series name
+        var bySeries = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var entry in newMissing)
+        {
+            var pipe = entry.IndexOf('|', StringComparison.Ordinal);
+            if (pipe < 0)
+            {
+                continue;
+            }
+
+            var seriesName = entry[..pipe];
+            var item = entry[(pipe + 1)..];
+
+            if (!bySeries.TryGetValue(seriesName, out var list))
+            {
+                list = new List<string>();
+                bySeries[seriesName] = list;
+            }
+
+            list.Add(item);
+        }
+
+        var parts = new List<string>();
+        foreach (var kvp in bySeries.Take(5))
+        {
+            var items = string.Join(", ", kvp.Value.Take(3));
+            if (kvp.Value.Count > 3)
+            {
+                items += $" +{kvp.Value.Count - 3} more";
+            }
+
+            parts.Add($"{kvp.Key}: {items}");
+        }
+
+        var summary = string.Join("; ", parts);
+        if (bySeries.Count > 5)
+        {
+            summary += $" (+{bySeries.Count - 5} more series)";
+        }
+
+        return $"{newMissing.Count} new missing items — {summary}";
+    }
+
+    private string GetScanFilePath()
+    {
+        var dir = Path.Combine(_appPaths.PluginConfigurationsPath, "ShowHealth");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "last-scan.json");
+    }
+
+    private async Task<HashSet<string>?> LoadPreviousSnapshotAsync(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+            var list = JsonSerializer.Deserialize<List<string>>(json);
+            return list != null ? new HashSet<string>(list, StringComparer.Ordinal) : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load previous scan snapshot, treating as first run");
+            return null;
+        }
+    }
+
+    private static async Task SaveSnapshotAsync(string path, HashSet<string> snapshot)
+    {
+        var json = JsonSerializer.Serialize(snapshot.ToList(), JsonOptions);
+        await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
     }
 }

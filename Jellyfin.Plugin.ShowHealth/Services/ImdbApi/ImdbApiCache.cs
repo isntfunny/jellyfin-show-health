@@ -90,7 +90,11 @@ public class ImdbApiCache : IDisposable
     /// <summary>
     /// Sets a value in the cache.
     /// </summary>
-    public async Task SetAsync<T>(string key, T value, CancellationToken cancellationToken = default)
+    /// <param name="key">Cache key.</param>
+    /// <param name="value">Value to cache.</param>
+    /// <param name="ttlOverride">Optional TTL override; uses the configured default when null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task SetAsync<T>(string key, T value, TimeSpan? ttlOverride = null, CancellationToken cancellationToken = default)
     {
         var filePath = GetFilePath(key);
 
@@ -101,7 +105,7 @@ public class ImdbApiCache : IDisposable
             var entry = new CacheEntry<T>
             {
                 Value = value,
-                ExpiresAt = DateTimeOffset.UtcNow.Add(_ttl),
+                ExpiresAt = DateTimeOffset.UtcNow.Add(ttlOverride ?? _ttl),
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);

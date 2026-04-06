@@ -55,6 +55,19 @@ public class ShowHealthController : ControllerBase
     }
 
     /// <summary>
+    /// Clears all IMDb API cache entries.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>No content on success.</returns>
+    [HttpPost("ClearCache")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<ActionResult> ClearCache(CancellationToken cancellationToken)
+    {
+        await _analyzer.ClearCacheAsync(cancellationToken).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
     /// Analyzes a single series against IMDb by its IMDb ID.
     /// </summary>
     /// <param name="imdbId">The IMDb ID (e.g. tt1234567).</param>

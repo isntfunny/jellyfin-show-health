@@ -47,9 +47,12 @@ public class ImdbApiClient : IDisposable
     /// <summary>
     /// Gets a title by its IMDb ID.
     /// </summary>
-    public async Task<Title?> GetTitleAsync(string titleId, CancellationToken cancellationToken = default)
+    /// <param name="titleId">The IMDb title ID.</param>
+    /// <param name="cacheTtl">Optional cache TTL override.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<Title?> GetTitleAsync(string titleId, TimeSpan? cacheTtl = null, CancellationToken cancellationToken = default)
     {
-        return await ExecuteCachedAsync<Title>($"/titles/{titleId}", cancellationToken).ConfigureAwait(false);
+        return await ExecuteCachedAsync<Title>($"/titles/{titleId}", cancellationToken, cacheTtl: cacheTtl).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -154,11 +157,18 @@ public class ImdbApiClient : IDisposable
     /// <summary>
     /// Lists episodes for a TV series title.
     /// </summary>
+    /// <param name="titleId">The IMDb title ID.</param>
+    /// <param name="season">Season number filter.</param>
+    /// <param name="pageSize">Maximum number of results to return.</param>
+    /// <param name="pageToken">Pagination token from a previous response.</param>
+    /// <param name="cacheTtl">Optional cache TTL override.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<ListTitleEpisodesResponse> ListTitleEpisodesAsync(
         string titleId,
         string? season = null,
         int? pageSize = null,
         string? pageToken = null,
+        TimeSpan? cacheTtl = null,
         CancellationToken cancellationToken = default)
     {
         var queryParams = new Dictionary<string, string>();
@@ -166,7 +176,7 @@ public class ImdbApiClient : IDisposable
         AddParam(queryParams, "pageSize", pageSize?.ToString(CultureInfo.InvariantCulture));
         AddParam(queryParams, "pageToken", pageToken);
 
-        var result = await ExecuteCachedAsync<ListTitleEpisodesResponse>($"/titles/{titleId}/episodes", cancellationToken, queryParams).ConfigureAwait(false);
+        var result = await ExecuteCachedAsync<ListTitleEpisodesResponse>($"/titles/{titleId}/episodes", cancellationToken, queryParams, cacheTtl).ConfigureAwait(false);
         return result ?? new ListTitleEpisodesResponse();
     }
 
@@ -281,9 +291,12 @@ public class ImdbApiClient : IDisposable
     /// <summary>
     /// Lists seasons for a title.
     /// </summary>
-    public async Task<ListTitleSeasonsResponse> ListTitleSeasonsAsync(string titleId, CancellationToken cancellationToken = default)
+    /// <param name="titleId">The IMDb title ID.</param>
+    /// <param name="cacheTtl">Optional cache TTL override.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task<ListTitleSeasonsResponse> ListTitleSeasonsAsync(string titleId, TimeSpan? cacheTtl = null, CancellationToken cancellationToken = default)
     {
-        return await ExecuteCachedAsync<ListTitleSeasonsResponse>($"/titles/{titleId}/seasons", cancellationToken).ConfigureAwait(false)
+        return await ExecuteCachedAsync<ListTitleSeasonsResponse>($"/titles/{titleId}/seasons", cancellationToken, cacheTtl: cacheTtl).ConfigureAwait(false)
                ?? new ListTitleSeasonsResponse();
     }
 
@@ -445,7 +458,7 @@ public class ImdbApiClient : IDisposable
         return await _cache.CleanExpiredAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<T?> ExecuteCachedAsync<T>(string path, CancellationToken cancellationToken, Dictionary<string, string>? queryParams = null)
+    private async Task<T?> ExecuteCachedAsync<T>(string path, CancellationToken cancellationToken, Dictionary<string, string>? queryParams = null, TimeSpan? cacheTtl = null)
     {
         // Cache key uses only the relative path + query string, not the base URL.
         // This ensures cache entries remain valid if the base URL is ever reconfigured.
@@ -461,7 +474,7 @@ public class ImdbApiClient : IDisposable
 
         if (result != null)
         {
-            await _cache.SetAsync(cacheKey, result, cancellationToken).ConfigureAwait(false);
+            await _cache.SetAsync(cacheKey, result, cacheTtl, cancellationToken).ConfigureAwait(false);
         }
 
         return result;
