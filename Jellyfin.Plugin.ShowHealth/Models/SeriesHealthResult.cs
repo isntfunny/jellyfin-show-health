@@ -154,6 +154,48 @@ public class NextEpisodeInfo
 }
 
 /// <summary>
+/// Response for the series list endpoint (Jellyfin-only data, no IMDb).
+/// </summary>
+public class SeriesListResponse
+{
+    /// <summary>
+    /// Gets or sets the list of series.
+    /// </summary>
+    [JsonPropertyName("series")]
+    public List<SeriesListItem> Series { get; set; } = new();
+}
+
+/// <summary>
+/// Basic series info from Jellyfin (before IMDb analysis).
+/// </summary>
+public class SeriesListItem
+{
+    /// <summary>
+    /// Gets or sets the series name.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the Jellyfin item ID.
+    /// </summary>
+    [JsonPropertyName("jellyfinId")]
+    public string JellyfinId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the IMDb ID.
+    /// </summary>
+    [JsonPropertyName("imdbId")]
+    public string ImdbId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the year the series started.
+    /// </summary>
+    [JsonPropertyName("startYear")]
+    public int StartYear { get; set; }
+}
+
+/// <summary>
 /// Summary statistics across all series.
 /// </summary>
 public class HealthSummary

@@ -8,6 +8,16 @@ class ShowHealthApi {
         var response = await this._apiClient.getJSON(url);
         return response;
     }
+
+    async fetchSeries() {
+        var url = this._apiClient.getUrl('/ShowHealth/Series');
+        return await this._apiClient.getJSON(url);
+    }
+
+    async analyzeSeries(imdbId) {
+        var url = this._apiClient.getUrl('/ShowHealth/Analyze/' + imdbId);
+        return await this._apiClient.getJSON(url);
+    }
 }
 
 class ShowHealthSorter {
@@ -31,9 +41,21 @@ class ShowHealthSorter {
                (s.missingSeasons && s.missingSeasons.length > 0);
     }
 
+    _isAnalyzed(s) {
+        return s._analyzed === true;
+    }
+
     _sortByStatus(series) {
         var self = this;
         return series.sort(function (a, b) {
+            var aAnalyzed = self._isAnalyzed(a);
+            var bAnalyzed = self._isAnalyzed(b);
+            if (aAnalyzed !== bAnalyzed) {
+                return aAnalyzed ? -1 : 1;
+            }
+            if (!aAnalyzed && !bAnalyzed) {
+                return a.name.localeCompare(b.name);
+            }
             var aInc = self._isIncomplete(a);
             var bInc = self._isIncomplete(b);
             if (aInc !== bInc) {
@@ -48,10 +70,13 @@ class ShowHealthSorter {
         var withNext = [];
         var incomplete = [];
         var complete = [];
+        var notAnalyzed = [];
 
         for (var i = 0; i < series.length; i++) {
             var s = series[i];
-            if (s.nextEpisode && s.nextEpisode.releaseDate) {
+            if (!self._isAnalyzed(s)) {
+                notAnalyzed.push(s);
+            } else if (s.nextEpisode && s.nextEpisode.releaseDate) {
                 withNext.push(s);
             } else if (self._isIncomplete(s)) {
                 incomplete.push(s);
@@ -65,8 +90,9 @@ class ShowHealthSorter {
         });
         incomplete.sort(function (a, b) { return a.name.localeCompare(b.name); });
         complete.sort(function (a, b) { return a.name.localeCompare(b.name); });
+        notAnalyzed.sort(function (a, b) { return a.name.localeCompare(b.name); });
 
-        return withNext.concat(incomplete, complete);
+        return withNext.concat(incomplete, complete, notAnalyzed);
     }
 
     _sortByName(series) {
@@ -82,16 +108,110 @@ class ShowHealthTable {
         this._expandedRows = {};
     }
 
+    renderInitial(seriesList, container) {
+        var html = '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
+        html += this._renderHeader();
+
+        for (var i = 0; i < seriesList.length; i++) {
+            html += this._renderInitialRow(seriesList[i], i);
+        }
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    updateRow(index, healthResult, container) {
+        var row = container.querySelector('tr[data-index="' + index + '"]');
+        if (!row) {
+            return;
+        }
+
+        var incomplete = this._isIncomplete(healthResult);
+        var opacity = incomplete ? '1' : '0.5';
+        var cursor = incomplete ? 'cursor:pointer;' : '';
+
+        row.style.opacity = opacity;
+        row.style.cursor = incomplete ? 'pointer' : '';
+
+        // Arrow cell
+        var arrowCell = row.cells[0];
+        if (incomplete) {
+            arrowCell.innerHTML = '<span class="showhealth-arrow" style="cursor:pointer;font-size:1.1em;transition:transform 0.2s;display:inline-block;">\u25B6</span>';
+        } else {
+            arrowCell.innerHTML = '';
+        }
+
+        // Status badge
+        var statusCell = row.cells[3];
+        if (healthResult.status === 'ended') {
+            statusCell.innerHTML = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
+        } else {
+            statusCell.innerHTML = '<span style="background:#1a2a3a;color:#42a5f5;padding:2px 8px;border-radius:3px;font-size:0.85em;">Running</span>';
+        }
+
+        // Seasons
+        var seasonsCell = row.cells[4];
+        var missingSeasons = healthResult.missingSeasons ? healthResult.missingSeasons.length : 0;
+        var seasonsColor = missingSeasons > 0 ? 'color:#e5383b;' : '';
+        seasonsCell.innerHTML = '<span style="' + seasonsColor + '">' + healthResult.seasonsLocal + '/' + healthResult.seasonsTotal + '</span>';
+
+        // Missing
+        var missingCell = row.cells[5];
+        if (!incomplete) {
+            missingCell.innerHTML = '<span style="color:#4caf50;">Complete</span>';
+        } else {
+            var count = healthResult.missingEpisodes ? healthResult.missingEpisodes.length : 0;
+            missingCell.innerHTML = '<span style="color:#e5383b;">' + count + ' episode' + (count !== 1 ? 's' : '') + '</span>';
+        }
+
+        // Next episode
+        var nextCell = row.cells[6];
+        if (healthResult.nextEpisode && healthResult.nextEpisode.releaseDate) {
+            nextCell.innerHTML = '<span style="background:#2a2a1a;color:#ffa726;padding:2px 8px;border-radius:3px;font-size:0.85em;">' +
+                       this._escapeHtml(healthResult.nextEpisode.releaseDate) + '</span>';
+        } else {
+            nextCell.innerHTML = '';
+        }
+
+        // Insert detail row if incomplete
+        if (incomplete) {
+            var detailHtml = this._renderDetailRow(healthResult, index);
+            if (detailHtml) {
+                row.insertAdjacentHTML('afterend', detailHtml);
+            }
+
+            // Bind click for expand/collapse
+            var self = this;
+            row.addEventListener('click', function () {
+                self._expandedRows[index] = !self._expandedRows[index];
+                var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
+                var arrow = row.querySelector('.showhealth-arrow');
+
+                if (detailRow) {
+                    detailRow.style.display = self._expandedRows[index] ? '' : 'none';
+                }
+                if (arrow) {
+                    arrow.style.transform = self._expandedRows[index] ? 'rotate(90deg)' : '';
+                }
+            });
+        }
+    }
+
     render(series, container) {
         var html = '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
         html += this._renderHeader();
 
         for (var i = 0; i < series.length; i++) {
-            html += this._renderSeriesRow(series[i], i);
-            html += this._renderDetailRow(series[i], i);
+            var s = series[i];
+            if (s._analyzed) {
+                html += this._renderSeriesRow(s, i);
+                html += this._renderDetailRow(s, i);
+            } else {
+                html += this._renderInitialRow(s, i);
+            }
         }
 
-        html += '</table>';
+        html += '</tbody></table>';
         container.innerHTML = html;
         this._bindEvents(container, series);
     }
@@ -106,6 +226,27 @@ class ShowHealthTable {
             '<th style="padding:8px;">Missing</th>' +
             '<th style="padding:8px;">Next Episode</th>' +
             '</tr></thead><tbody>';
+    }
+
+    _renderInitialRow(s, index) {
+        var posterUrl = this._apiClient.getUrl('/Items/' + s.jellyfinId + '/Images/Primary', { height: 54 });
+        var poster = '<img src="' + posterUrl + '" style="height:54px;border-radius:3px;" onerror="this.style.display=\'none\'" />';
+
+        var yearRange = s.startYear ? (s.startYear + '\u2013') : '';
+        var nameCell = '<div>' + this._escapeHtml(s.name) + '</div>' +
+                       '<div style="color:#888;font-size:0.85em;">' + yearRange + '</div>';
+
+        var pendingText = '<span style="color:#888;font-style:italic;">Indizieren...</span>';
+
+        return '<tr data-index="' + index + '" style="border-bottom:1px solid #222;opacity:0.5;">' +
+            '<td style="padding:8px 4px;text-align:center;"></td>' +
+            '<td style="padding:8px 4px;">' + poster + '</td>' +
+            '<td style="padding:8px;">' + nameCell + '</td>' +
+            '<td style="padding:8px;">' + pendingText + '</td>' +
+            '<td style="padding:8px;">' + pendingText + '</td>' +
+            '<td style="padding:8px;">' + pendingText + '</td>' +
+            '<td style="padding:8px;">' + pendingText + '</td>' +
+            '</tr>';
     }
 
     _isIncomplete(s) {
@@ -151,9 +292,7 @@ class ShowHealthTable {
                        this._escapeHtml(s.nextEpisode.releaseDate) + '</span>';
         }
 
-        var cursor = incomplete ? 'cursor:pointer;' : '';
-
-        return '<tr data-index="' + index + '" style="border-bottom:1px solid #222;opacity:' + opacity + ';' + cursor + '">' +
+        return '<tr data-index="' + index + '" style="border-bottom:1px solid #222;opacity:' + opacity + ';' + (incomplete ? 'cursor:pointer;' : '') + '">' +
             '<td style="padding:8px 4px;text-align:center;">' + arrow + '</td>' +
             '<td style="padding:8px 4px;">' + poster + '</td>' +
             '<td style="padding:8px;">' + nameCell + '</td>' +
@@ -227,7 +366,7 @@ class ShowHealthTable {
             (function (row) {
                 var idx = parseInt(row.getAttribute('data-index'), 10);
                 var s = series[idx];
-                if (!self._isIncomplete(s)) {
+                if (!s._analyzed || !self._isIncomplete(s)) {
                     return;
                 }
 
@@ -263,11 +402,15 @@ class ShowHealthPage {
         this._table = new ShowHealthTable(ApiClient);
         this._currentSort = 'status';
         this._data = null;
+        this._seriesList = [];
+        this._analysisResults = {};
+        this._indexingComplete = false;
     }
 
     async init() {
         this._bindSortButtons();
         this._updateSortButtonState();
+        this._setSortButtonsEnabled(false);
         await this._loadData();
     }
 
@@ -278,13 +421,22 @@ class ShowHealthPage {
         for (var i = 0; i < buttons.length; i++) {
             (function (btn) {
                 btn.addEventListener('click', function () {
+                    if (!self._indexingComplete) {
+                        return;
+                    }
                     self._currentSort = btn.getAttribute('data-sort');
                     self._updateSortButtonState();
-                    if (self._data) {
-                        self._renderTable();
-                    }
+                    self._renderTable();
                 });
             })(buttons[i]);
+        }
+    }
+
+    _setSortButtonsEnabled(enabled) {
+        var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
+        for (var i = 0; i < buttons.length; i++) {
+            buttons[i].style.opacity = enabled ? '1' : '0.5';
+            buttons[i].style.pointerEvents = enabled ? '' : 'none';
         }
     }
 
@@ -306,18 +458,93 @@ class ShowHealthPage {
         var errorEl = this._view.querySelector('#showHealthError');
         errorEl.style.display = 'none';
 
+        var summaryEl = this._view.querySelector('#showHealthSummary');
+        var container = this._view.querySelector('#showHealthTableContainer');
+
         Dashboard.showLoadingMsg();
 
         try {
-            this._data = await this._api.fetchStatus();
+            // Step 1: Fetch series list instantly
+            var response = await this._api.fetchSeries();
+            this._seriesList = response.series;
+            var total = this._seriesList.length;
+
+            Dashboard.hideLoadingMsg();
+
+            // Step 2: Render table immediately with basic data
+            this._table.renderInitial(this._seriesList, container);
+
+            // Step 3: Show initial progress
+            summaryEl.textContent = 'Indizieren... 0/' + total;
+
+            // Step 4: Analyze each series one by one
+            for (var i = 0; i < this._seriesList.length; i++) {
+                var series = this._seriesList[i];
+                try {
+                    var result = await this._api.analyzeSeries(series.imdbId);
+                    this._analysisResults[series.imdbId] = result;
+
+                    // Merge analysis result into series list item
+                    Object.assign(this._seriesList[i], result);
+                    this._seriesList[i]._analyzed = true;
+
+                    // Update row in-place
+                    this._table.updateRow(i, result, container);
+                } catch (err) {
+                    // Mark as analyzed but failed - show as-is
+                    this._seriesList[i]._analyzed = true;
+                    this._seriesList[i].status = 'unknown';
+                    this._seriesList[i].seasonsLocal = 0;
+                    this._seriesList[i].seasonsTotal = 0;
+                    this._seriesList[i].missingEpisodes = [];
+                    this._seriesList[i].missingSeasons = [];
+                    this._table.updateRow(i, this._seriesList[i], container);
+                }
+
+                // Update progress
+                summaryEl.textContent = 'Indizieren... ' + (i + 1) + '/' + total;
+            }
+
+            // Step 5: Show final summary
+            this._indexingComplete = true;
+            this._setSortButtonsEnabled(true);
+            this._buildDataFromResults();
             this._updateSummary();
             this._renderTable();
         } catch (err) {
+            Dashboard.hideLoadingMsg();
             errorEl.textContent = 'Failed to load show health data: ' + (err.message || err);
             errorEl.style.display = 'block';
-        } finally {
-            Dashboard.hideLoadingMsg();
         }
+    }
+
+    _buildDataFromResults() {
+        var series = this._seriesList;
+        var incomplete = 0;
+        var running = 0;
+        var ended = 0;
+
+        for (var i = 0; i < series.length; i++) {
+            var s = series[i];
+            if (s._analyzed) {
+                if ((s.missingEpisodes && s.missingEpisodes.length > 0) ||
+                    (s.missingSeasons && s.missingSeasons.length > 0)) {
+                    incomplete++;
+                }
+                if (s.status === 'running') running++;
+                if (s.status === 'ended') ended++;
+            }
+        }
+
+        this._data = {
+            series: series,
+            summary: {
+                total: series.length,
+                incomplete: incomplete,
+                running: running,
+                ended: ended,
+            },
+        };
     }
 
     _updateSummary() {
@@ -329,6 +556,9 @@ class ShowHealthPage {
     }
 
     _renderTable() {
+        if (!this._data) {
+            return;
+        }
         var container = this._view.querySelector('#showHealthTableContainer');
         var sorted = this._sorter.sort(this._data.series, this._currentSort);
         this._table.render(sorted, container);

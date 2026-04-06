@@ -39,4 +39,36 @@ public class ShowHealthController : ControllerBase
         var result = await _analyzer.AnalyzeAsync(cancellationToken).ConfigureAwait(false);
         return Ok(result);
     }
+
+    /// <summary>
+    /// Returns all series from the Jellyfin library instantly (no IMDb calls).
+    /// </summary>
+    /// <returns>List of series with basic Jellyfin data.</returns>
+    [HttpGet("Series")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<SeriesListResponse> GetSeries()
+    {
+        var series = _analyzer.GetSeriesList();
+        return Ok(series);
+    }
+
+    /// <summary>
+    /// Analyzes a single series against IMDb by its IMDb ID.
+    /// </summary>
+    /// <param name="imdbId">The IMDb ID (e.g. tt1234567).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Health result for the series, or 404 if not found.</returns>
+    [HttpGet("Analyze/{imdbId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<SeriesHealthResult>> AnalyzeSeries(string imdbId, CancellationToken cancellationToken)
+    {
+        var result = await _analyzer.AnalyzeSeriesAsync(imdbId, cancellationToken).ConfigureAwait(false);
+        if (result == null)
+        {
+            return NotFound();
+        }
+
+        return Ok(result);
+    }
 }

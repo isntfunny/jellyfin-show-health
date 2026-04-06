@@ -35,6 +35,38 @@ public class ShowHealthAnalyzer
     }
 
     /// <summary>
+    /// Returns a list of all series with IMDb IDs from Jellyfin (no IMDb calls).
+    /// </summary>
+    public SeriesListResponse GetSeriesList()
+    {
+        var seriesList = _libraryService.GetSeriesWithImdbId();
+        var items = seriesList.Select(s => new SeriesListItem
+        {
+            Name = s.Name,
+            JellyfinId = s.Id.ToString("N"),
+            ImdbId = s.ImdbId!,
+            StartYear = s.ProductionYear ?? 0,
+        }).ToList();
+
+        return new SeriesListResponse { Series = items };
+    }
+
+    /// <summary>
+    /// Analyzes a single series by IMDb ID against the IMDb API.
+    /// </summary>
+    public async Task<SeriesHealthResult?> AnalyzeSeriesAsync(string imdbId, CancellationToken cancellationToken = default)
+    {
+        var seriesList = _libraryService.GetSeriesWithImdbId(cancellationToken);
+        var series = seriesList.FirstOrDefault(s => s.ImdbId == imdbId);
+        if (series == null)
+        {
+            return null;
+        }
+
+        return await AnalyzeSeriesAsync(series, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Analyzes all series in the Jellyfin library and returns health status.
     /// </summary>
     public async Task<ShowHealthResponse> AnalyzeAsync(CancellationToken cancellationToken = default)

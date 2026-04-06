@@ -351,7 +351,6 @@ public class JellyfinLibraryService
             ParentId = seasonId,
             IncludeItemTypes = new[] { BaseItemKind.Episode },
             Recursive = false,
-            Limit = 0,
         };
 
         return _libraryManager.GetCount(query);
@@ -378,7 +377,6 @@ public class JellyfinLibraryService
         {
             IncludeItemTypes = new[] { BaseItemKind.Series },
             Recursive = true,
-            Limit = 0,
         };
 
         return _libraryManager.GetCount(query);
@@ -408,33 +406,19 @@ public class JellyfinLibraryService
 
     private static string? GetImdbIdFromItem(BaseItem item)
     {
-        // Try ProviderIds first (most common)
         var imdbId = GetProviderId(item, MetadataProvider.Imdb);
-        if (!string.IsNullOrEmpty(imdbId))
+        if (string.IsNullOrEmpty(imdbId))
         {
-            // Ensure proper format (tt prefix)
-            if (!imdbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
-            {
-                imdbId = "tt" + imdbId.TrimStart('0');
-            }
-
-            return imdbId;
+            return null;
         }
 
-        // Fallback: try GetUserDataKeys for Series
-        if (item is Series series)
+        // Ensure proper format (tt prefix)
+        if (!imdbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
         {
-            var keys = series.GetUserDataKeys();
-            foreach (var key in keys)
-            {
-                if (key.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
-                {
-                    return key;
-                }
-            }
+            imdbId = "tt" + imdbId.PadLeft(7, '0');
         }
 
-        return null;
+        return imdbId;
     }
 
     private static string? GetProviderId(BaseItem item, MetadataProvider provider)
