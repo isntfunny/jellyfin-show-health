@@ -1,0 +1,16 @@
+---
+name: "Show Health"
+guid: "2626c821-e54b-488a-b316-ea9c5f95e24f"
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+overview: "Jellyfin plugin skeleton for show quality scoring and display"
+description: >
+  Basisprojekt fuer ein Jellyfin-Plugin, das spaeter Show- oder
+  Medienqualitaet auswerten und in Jellyfin verfuegbar machen kann.
+category: "General"
+owner: "tecfriends"
+artifacts:
+- "Jellyfin.Plugin.ShowHealth.dll"
+changelog: >
+  Initial project bootstrap based on the official Jellyfin plugin template.
