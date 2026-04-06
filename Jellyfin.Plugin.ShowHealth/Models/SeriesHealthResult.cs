@@ -1,0 +1,184 @@
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
+
+namespace Jellyfin.Plugin.ShowHealth.Models;
+
+/// <summary>
+/// Top-level response for the Show Health status endpoint.
+/// </summary>
+public class ShowHealthResponse
+{
+    /// <summary>
+    /// Gets or sets the list of series health results.
+    /// </summary>
+    [JsonPropertyName("series")]
+    public List<SeriesHealthResult> Series { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the summary statistics across all series.
+    /// </summary>
+    [JsonPropertyName("summary")]
+    public HealthSummary Summary { get; set; } = new();
+}
+
+/// <summary>
+/// Health status for a single TV series.
+/// </summary>
+public class SeriesHealthResult
+{
+    /// <summary>
+    /// Gets or sets the series name.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the Jellyfin item ID.
+    /// </summary>
+    [JsonPropertyName("jellyfinId")]
+    public string JellyfinId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the IMDb ID.
+    /// </summary>
+    [JsonPropertyName("imdbId")]
+    public string ImdbId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the year the series started.
+    /// </summary>
+    [JsonPropertyName("startYear")]
+    public int StartYear { get; set; }
+
+    /// <summary>
+    /// Gets or sets the year the series ended, if applicable.
+    /// </summary>
+    [JsonPropertyName("endYear")]
+    public int? EndYear { get; set; }
+
+    /// <summary>
+    /// Gets or sets the series status (e.g. "running", "ended").
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "unknown";
+
+    /// <summary>
+    /// Gets or sets the number of seasons present locally.
+    /// </summary>
+    [JsonPropertyName("seasonsLocal")]
+    public int SeasonsLocal { get; set; }
+
+    /// <summary>
+    /// Gets or sets the total number of seasons according to the reference source.
+    /// </summary>
+    [JsonPropertyName("seasonsTotal")]
+    public int SeasonsTotal { get; set; }
+
+    /// <summary>
+    /// Gets or sets the list of season numbers that are missing locally.
+    /// </summary>
+    [JsonPropertyName("missingSeasons")]
+    public List<int> MissingSeasons { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the list of individual missing episodes.
+    /// </summary>
+    [JsonPropertyName("missingEpisodes")]
+    public List<MissingEpisodeInfo> MissingEpisodes { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets info about the next upcoming episode, if any.
+    /// </summary>
+    [JsonPropertyName("nextEpisode")]
+    public NextEpisodeInfo? NextEpisode { get; set; }
+}
+
+/// <summary>
+/// Info about a missing episode.
+/// </summary>
+public class MissingEpisodeInfo
+{
+    /// <summary>
+    /// Gets or sets the season number.
+    /// </summary>
+    [JsonPropertyName("season")]
+    public int Season { get; set; }
+
+    /// <summary>
+    /// Gets or sets the episode number within the season.
+    /// </summary>
+    [JsonPropertyName("episode")]
+    public int Episode { get; set; }
+
+    /// <summary>
+    /// Gets or sets the episode title.
+    /// </summary>
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the IMDb ID for this episode, if available.
+    /// </summary>
+    [JsonPropertyName("imdbId")]
+    public string? ImdbId { get; set; }
+}
+
+/// <summary>
+/// Info about the next upcoming episode.
+/// </summary>
+public class NextEpisodeInfo
+{
+    /// <summary>
+    /// Gets or sets the season number.
+    /// </summary>
+    [JsonPropertyName("season")]
+    public int Season { get; set; }
+
+    /// <summary>
+    /// Gets or sets the episode number within the season.
+    /// </summary>
+    [JsonPropertyName("episode")]
+    public int Episode { get; set; }
+
+    /// <summary>
+    /// Gets or sets the episode title.
+    /// </summary>
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the release date of the episode, if known.
+    /// </summary>
+    [JsonPropertyName("releaseDate")]
+    public string? ReleaseDate { get; set; }
+}
+
+/// <summary>
+/// Summary statistics across all series.
+/// </summary>
+public class HealthSummary
+{
+    /// <summary>
+    /// Gets or sets the total number of series evaluated.
+    /// </summary>
+    [JsonPropertyName("total")]
+    public int Total { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of series with missing content.
+    /// </summary>
+    [JsonPropertyName("incomplete")]
+    public int Incomplete { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of currently running series.
+    /// </summary>
+    [JsonPropertyName("running")]
+    public int Running { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of ended series.
+    /// </summary>
+    [JsonPropertyName("ended")]
+    public int Ended { get; set; }
+}
