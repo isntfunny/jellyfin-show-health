@@ -21,6 +21,10 @@ public class ShowHealthAnalyzer
     private readonly ImdbApiClient _imdbClient;
     private readonly ILogger<ShowHealthAnalyzer> _logger;
 
+    private Dictionary<string, JellyfinSeriesInfo>? _seriesIndexCache;
+    private DateTime _seriesIndexCacheTime;
+    private static readonly TimeSpan SeriesIndexCacheTtl = TimeSpan.FromMinutes(2);
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ShowHealthAnalyzer"/> class.
     /// </summary>
@@ -46,31 +50,45 @@ public class ShowHealthAnalyzer
 
     /// <summary>
     /// Returns a list of all series with IMDb IDs from Jellyfin (no IMDb calls).
+    /// Uses the same index as AnalyzeAsync to ensure consistency.
     /// </summary>
     public SeriesListResponse GetSeriesList()
     {
-        var seriesList = _libraryService.GetSeriesWithImdbId();
-        var items = new List<SeriesListItem>();
+        var seriesIndex = BuildSeriesIndex();
+        var items = seriesIndex.Values.Select(s => new SeriesListItem
+        {
+            Name = s.Name,
+            JellyfinId = s.Id.ToString("N"),
+            ImdbId = s.ImdbId!,
+            StartYear = s.ProductionYear ?? 0,
+        }).ToList();
+
+        return new SeriesListResponse { Series = items };
+    }
+
+    /// <summary>
+    /// Builds a dictionary of series indexed by IMDb ID.
+    /// No heavy filtering here — the virtual/empty check happens in AnalyzeSeriesAsync.
+    /// Cached for 2 minutes to avoid rebuilding on every progressive-loading call.
+    /// </summary>
+    private Dictionary<string, JellyfinSeriesInfo> BuildSeriesIndex(CancellationToken cancellationToken = default)
+    {
+        if (_seriesIndexCache != null && (DateTime.UtcNow - _seriesIndexCacheTime) < SeriesIndexCacheTtl)
+        {
+            return _seriesIndexCache;
+        }
+
+        var seriesList = _libraryService.GetSeriesWithImdbId(cancellationToken);
+        var index = new Dictionary<string, JellyfinSeriesInfo>(StringComparer.Ordinal);
 
         foreach (var s in seriesList)
         {
-            // Skip series with no real episodes on disk
-            var seasons = _libraryService.GetSeasonsForSeries(s.Id);
-            if (seasons.Count == 0 || seasons.All(season => season.EpisodeCount == 0))
-            {
-                continue;
-            }
-
-            items.Add(new SeriesListItem
-            {
-                Name = s.Name,
-                JellyfinId = s.Id.ToString("N"),
-                ImdbId = s.ImdbId!,
-                StartYear = s.ProductionYear ?? 0,
-            });
+            index[s.ImdbId!] = s;
         }
 
-        return new SeriesListResponse { Series = items };
+        _seriesIndexCache = index;
+        _seriesIndexCacheTime = DateTime.UtcNow;
+        return index;
     }
 
     /// <summary>
@@ -78,9 +96,8 @@ public class ShowHealthAnalyzer
     /// </summary>
     public async Task<SeriesHealthResult?> AnalyzeSeriesAsync(string imdbId, CancellationToken cancellationToken = default)
     {
-        var seriesList = _libraryService.GetSeriesWithImdbId(cancellationToken);
-        var series = seriesList.FirstOrDefault(s => s.ImdbId == imdbId);
-        if (series == null)
+        var seriesIndex = BuildSeriesIndex(cancellationToken);
+        if (!seriesIndex.TryGetValue(imdbId, out var series))
         {
             return null;
         }
@@ -93,12 +110,12 @@ public class ShowHealthAnalyzer
     /// </summary>
     public async Task<ShowHealthResponse> AnalyzeAsync(CancellationToken cancellationToken = default)
     {
-        var seriesList = _libraryService.GetSeriesWithImdbId(cancellationToken);
-        _logger.LogInformation("Analyzing {Count} series with IMDb IDs", seriesList.Count);
+        var seriesIndex = BuildSeriesIndex(cancellationToken);
+        _logger.LogInformation("Analyzing {Count} series with IMDb IDs", seriesIndex.Count);
 
         var results = new List<SeriesHealthResult>();
 
-        foreach (var series in seriesList)
+        foreach (var series in seriesIndex.Values)
         {
             if (cancellationToken.IsCancellationRequested)
             {
@@ -243,10 +260,26 @@ public class ShowHealthAnalyzer
                 continue;
             }
 
-            // Fix 3: use the pre-loaded episode dictionary instead of a separate query
-            var localEpisodeNumbers = allLocalEpisodesBySeason.TryGetValue(seasonNum, out var localEps)
-                ? localEps.Where(e => e.IndexNumber.HasValue).Select(e => e.IndexNumber!.Value).ToHashSet()
-                : new HashSet<int>();
+            // Build set of all episode numbers covered locally, including multi-episode files
+            // e.g. S06E01E02 has IndexNumber=1 and IndexNumberEnd=2, covering episodes 1 AND 2
+            var localEpisodeNumbers = new HashSet<int>();
+            if (allLocalEpisodesBySeason.TryGetValue(seasonNum, out var localEps))
+            {
+                foreach (var e in localEps)
+                {
+                    if (!e.IndexNumber.HasValue)
+                    {
+                        continue;
+                    }
+
+                    var start = e.IndexNumber.Value;
+                    var end = e.IndexNumberEnd ?? start;
+                    for (var n = start; n <= end; n++)
+                    {
+                        localEpisodeNumbers.Add(n);
+                    }
+                }
+            }
 
             foreach (var ep in imdbEpisodes)
             {
@@ -272,14 +305,15 @@ public class ShowHealthAnalyzer
         // Fix 5: seasonsTotal = local seasons + confirmed missing seasons (excludes not-yet-aired)
         var seasonsTotal = localSeasonNumbers.Count + missingSeasonInfos.Count;
 
-        // Fix 11: invalidate cache for seasons with imminent releases so next scan fetches fresh data
+        // Invalidate cache for seasons with imminent releases so next scan fetches fresh data.
+        // Uses prefix match to catch all paginated cache entries for this season.
         if (nextEpisode?.ReleaseDate != null)
         {
             var nextDate = ParseDateString(nextEpisode.ReleaseDate);
             if (nextDate.HasValue && (nextDate.Value - now).TotalDays <= 7)
             {
-                var seasonPath = $"/titles/{imdbId}/episodes?season={nextEpisode.Season.ToString(CultureInfo.InvariantCulture)}&pageSize=50";
-                await _imdbClient.InvalidateCacheForKeyAsync(seasonPath, cancellationToken).ConfigureAwait(false);
+                var seasonPrefix = $"/titles/{imdbId}/episodes";
+                await _imdbClient.InvalidateCacheByPrefixAsync(seasonPrefix, cancellationToken).ConfigureAwait(false);
             }
         }
 

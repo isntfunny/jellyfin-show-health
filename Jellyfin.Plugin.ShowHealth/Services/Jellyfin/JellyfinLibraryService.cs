@@ -120,6 +120,11 @@ public class JellyfinEpisodeInfo
     public int? IndexNumber { get; set; }
 
     /// <summary>
+    /// End-Episode bei Multi-Episode-Dateien (z.B. S01E01E02 hat IndexNumber=1, IndexNumberEnd=2).
+    /// </summary>
+    public int? IndexNumberEnd { get; set; }
+
+    /// <summary>
     /// Season-Nummer.
     /// </summary>
     public int? ParentIndexNumber { get; set; }
@@ -299,6 +304,7 @@ public class JellyfinLibraryService
                 Id = episode.Id,
                 Name = episode.Name ?? string.Empty,
                 IndexNumber = episode.IndexNumber,
+                IndexNumberEnd = episode.IndexNumberEnd,
                 ParentIndexNumber = episode.ParentIndexNumber,
                 ImdbId = GetImdbIdFromItem(episode),
                 PremiereDate = episode.PremiereDate,
@@ -440,6 +446,7 @@ public class JellyfinLibraryService
                 Id = episode.Id,
                 Name = episode.Name ?? string.Empty,
                 IndexNumber = episode.IndexNumber,
+                IndexNumberEnd = episode.IndexNumberEnd,
                 ParentIndexNumber = episode.ParentIndexNumber,
                 ImdbId = GetImdbIdFromItem(episode),
                 PremiereDate = episode.PremiereDate,

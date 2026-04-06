@@ -441,13 +441,13 @@ public class ImdbApiClient : IDisposable
     }
 
     /// <summary>
-    /// Removes the cache entry for a specific relative path (e.g. after an imminent release is detected).
+    /// Invalidates all cache entries whose key starts with the given prefix.
     /// </summary>
-    /// <param name="path">The relative API path used as the cache key.</param>
+    /// <param name="pathPrefix">The relative API path prefix (e.g. "/titles/tt123/episodes").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async Task InvalidateCacheForKeyAsync(string path, CancellationToken cancellationToken = default)
+    public async Task InvalidateCacheByPrefixAsync(string pathPrefix, CancellationToken cancellationToken = default)
     {
-        await _cache.RemoveAsync(path, cancellationToken).ConfigureAwait(false);
+        await _cache.RemoveByPrefixAsync(pathPrefix, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

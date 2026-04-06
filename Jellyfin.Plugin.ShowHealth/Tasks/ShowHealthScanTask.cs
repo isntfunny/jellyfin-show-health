@@ -9,7 +9,9 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.ShowHealth.Models;
 using Jellyfin.Plugin.ShowHealth.Services;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
+using MediaBrowser.Model.Session;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -29,6 +31,7 @@ public class ShowHealthScanTask : IScheduledTask
 
     private readonly ShowHealthAnalyzer _analyzer;
     private readonly IActivityManager _activityManager;
+    private readonly ISessionManager _sessionManager;
     private readonly IServerApplicationPaths _appPaths;
     private readonly ILogger<ShowHealthScanTask> _logger;
 
@@ -38,11 +41,13 @@ public class ShowHealthScanTask : IScheduledTask
     public ShowHealthScanTask(
         ShowHealthAnalyzer analyzer,
         IActivityManager activityManager,
+        ISessionManager sessionManager,
         IServerApplicationPaths appPaths,
         ILogger<ShowHealthScanTask> logger)
     {
         _analyzer = analyzer;
         _activityManager = activityManager;
+        _sessionManager = sessionManager;
         _appPaths = appPaths;
         _logger = logger;
     }
@@ -57,7 +62,7 @@ public class ShowHealthScanTask : IScheduledTask
     public string Description => "Scans TV series library for missing episodes and seasons by comparing against IMDb data.";
 
     /// <inheritdoc />
-    public string Category => "Library";
+    public string Category => "Show Health";
 
     /// <inheritdoc />
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
@@ -92,6 +97,9 @@ public class ShowHealthScanTask : IScheduledTask
             // Find NEW missing items (in current but not in previous)
             var newMissing = currentSnapshot.Except(previousSnapshot!).ToList();
 
+            // Find COMPLETED items (were missing before, not anymore)
+            var completed = previousSnapshot!.Except(currentSnapshot).ToList();
+
             if (newMissing.Count > 0)
             {
                 var summary = FormatNotificationSummary(newMissing);
@@ -107,11 +115,41 @@ public class ShowHealthScanTask : IScheduledTask
                 {
                     Overview = summary,
                 }).ConfigureAwait(false);
+
+                // Push notification to all admin sessions (browser, apps)
+                await _sessionManager.SendMessageToAdminSessions(
+                    SessionMessageType.ActivityLogEntry,
+                    new { Header = "Show Health", Text = summary },
+                    cancellationToken).ConfigureAwait(false);
             }
-            else
+
+            if (completed.Count > 0)
+            {
+                var summary = FormatCompletedSummary(completed);
+
+                _logger.LogInformation(
+                    "Show Health scan: {Count} items completed",
+                    completed.Count);
+
+                await _activityManager.CreateAsync(new ActivityLog(
+                    "Show Health: content completed!",
+                    "ShowHealthScanCompleted",
+                    Guid.Empty)
+                {
+                    Overview = summary,
+                }).ConfigureAwait(false);
+
+                // Push notification to all admin sessions
+                await _sessionManager.SendMessageToAdminSessions(
+                    SessionMessageType.ActivityLogEntry,
+                    new { Header = "Show Health", Text = summary },
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (newMissing.Count == 0 && completed.Count == 0)
             {
                 _logger.LogInformation(
-                    "Show Health scan complete: no new missing items. {Total} series, {Incomplete} incomplete.",
+                    "Show Health scan complete: no changes. {Total} series, {Incomplete} incomplete.",
                     result.Summary.Total,
                     result.Summary.Incomplete);
             }
@@ -198,6 +236,50 @@ public class ShowHealthScanTask : IScheduledTask
         }
 
         return $"{newMissing.Count} new missing items — {summary}";
+    }
+
+    private static string FormatCompletedSummary(List<string> completed)
+    {
+        var bySeries = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var entry in completed)
+        {
+            var pipe = entry.IndexOf('|', StringComparison.Ordinal);
+            if (pipe < 0)
+            {
+                continue;
+            }
+
+            var seriesName = entry[..pipe];
+            var item = entry[(pipe + 1)..];
+
+            if (!bySeries.TryGetValue(seriesName, out var list))
+            {
+                list = new List<string>();
+                bySeries[seriesName] = list;
+            }
+
+            list.Add(item);
+        }
+
+        var parts = new List<string>();
+        foreach (var kvp in bySeries.Take(5))
+        {
+            var items = string.Join(", ", kvp.Value.Take(3));
+            if (kvp.Value.Count > 3)
+            {
+                items += $" +{kvp.Value.Count - 3} more";
+            }
+
+            parts.Add($"{kvp.Key}: {items}");
+        }
+
+        var summary = string.Join("; ", parts);
+        if (bySeries.Count > 5)
+        {
+            summary += $" (+{bySeries.Count - 5} more series)";
+        }
+
+        return $"\ud83c\udf89 {completed.Count} items now complete! {summary}";
     }
 
     private string GetScanFilePath()

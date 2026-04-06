@@ -104,6 +104,7 @@ public class ImdbApiCache : IDisposable
         {
             var entry = new CacheEntry<T>
             {
+                Key = key,
                 Value = value,
                 ExpiresAt = DateTimeOffset.UtcNow.Add(ttlOverride ?? _ttl),
             };
@@ -187,6 +188,35 @@ public class ImdbApiCache : IDisposable
         finally
         {
             keyLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Removes all cache entries whose original key starts with the given prefix.
+    /// </summary>
+    public async Task RemoveByPrefixAsync(string keyPrefix, CancellationToken cancellationToken = default)
+    {
+        foreach (var file in Directory.GetFiles(_cacheDir, $"*{CacheExtension}"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var content = await File.ReadAllTextAsync(file, cancellationToken).ConfigureAwait(false);
+                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("Key", out var keyProp))
+                {
+                    var key = keyProp.GetString();
+                    if (key != null && key.StartsWith(keyPrefix, StringComparison.Ordinal))
+                    {
+                        TryDeleteFile(file);
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                TryDeleteFile(file);
+            }
         }
     }
 
@@ -304,6 +334,8 @@ public class ImdbApiCache : IDisposable
 
     private sealed class CacheEntry<T>
     {
+        public string? Key { get; set; }
+
         public T? Value { get; set; }
 
         public DateTimeOffset ExpiresAt { get; set; }
