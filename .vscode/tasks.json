@@ -1,0 +1,57 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-and-deploy",
+      "dependsOrder": "sequence",
+      "dependsOn": ["build", "make-plugin-dir", "copy-dll"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "build",
+      "command": "dotnet",
+      "type": "shell",
+      "args": [
+        "publish",
+        "--configuration=Release",
+        "${workspaceFolder}/${config:pluginName}.sln",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "make-plugin-dir",
+      "type": "shell",
+      "command": "mkdir",
+      "args": [
+        "-p",
+        "${config:jellyfinPluginDir}/${config:pluginName}/"
+      ]
+    },
+    {
+      "label": "copy-dll",
+      "type": "shell",
+      "command": "cp",
+      "args": [
+        "-r",
+        "./${config:pluginName}/bin/Release/net9.0/publish/*",
+        "${config:jellyfinPluginDir}/${config:pluginName}/"
+      ]
+    },
+    {
+      "label": "restart-jellyfin",
+      "type": "shell",
+      "command": "docker",
+      "args": ["restart", "jellyfin"],
+      "dependsOn": ["build-and-deploy"]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Build & Deploy Plugin",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-and-deploy",
+            "program": "dotnet",
+            "args": ["build", "${workspaceFolder}/${config:pluginName}.sln"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen"
+        }
+    ]
+}
