@@ -21,28 +21,46 @@ class ShowHealthApi {
 }
 
 class ShowHealthSorter {
-    sort(series, mode) {
+    sort(series, mode, ascending) {
         var sorted = series.slice();
 
         switch (mode) {
             case 'status':
-                return this._sortByStatus(sorted);
-            case 'urgency':
-                return this._sortByUrgency(sorted);
+                sorted = this._sortByStatus(sorted);
+                break;
+            case 'missing':
+                sorted = this._sortByMissing(sorted);
+                break;
+            case 'release':
+                sorted = this._sortByRelease(sorted);
+                break;
             case 'name':
-                return this._sortByName(sorted);
+                sorted = this._sortByName(sorted);
+                break;
             default:
-                return sorted;
+                break;
         }
-    }
 
-    _isIncomplete(s) {
-        return (s.missingEpisodes && s.missingEpisodes.length > 0) ||
-               (s.missingSeasons && s.missingSeasons.length > 0);
+        if (!ascending) {
+            sorted.reverse();
+        }
+
+        return sorted;
     }
 
     _isAnalyzed(s) {
         return s._analyzed === true;
+    }
+
+    _totalMissing(s) {
+        var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
+        var seasonEps = 0;
+        if (s.missingSeasons) {
+            for (var i = 0; i < s.missingSeasons.length; i++) {
+                seasonEps += s.missingSeasons[i].episodeCount || 0;
+            }
+        }
+        return eps + seasonEps;
     }
 
     _sortByStatus(series) {
@@ -50,49 +68,56 @@ class ShowHealthSorter {
         return series.sort(function (a, b) {
             var aAnalyzed = self._isAnalyzed(a);
             var bAnalyzed = self._isAnalyzed(b);
-            if (aAnalyzed !== bAnalyzed) {
-                return aAnalyzed ? -1 : 1;
-            }
-            if (!aAnalyzed && !bAnalyzed) {
-                return a.name.localeCompare(b.name);
-            }
-            var aInc = self._isIncomplete(a);
-            var bInc = self._isIncomplete(b);
-            if (aInc !== bInc) {
-                return aInc ? -1 : 1;
-            }
+            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
+            if (!aAnalyzed) return a.name.localeCompare(b.name);
+            var aMissing = self._totalMissing(a);
+            var bMissing = self._totalMissing(b);
+            if ((aMissing > 0) !== (bMissing > 0)) return aMissing > 0 ? -1 : 1;
             return a.name.localeCompare(b.name);
         });
     }
 
-    _sortByUrgency(series) {
+    _sortByMissing(series) {
         var self = this;
-        var withNext = [];
-        var incomplete = [];
-        var complete = [];
-        var notAnalyzed = [];
-
-        for (var i = 0; i < series.length; i++) {
-            var s = series[i];
-            if (!self._isAnalyzed(s)) {
-                notAnalyzed.push(s);
-            } else if (s.nextEpisode && s.nextEpisode.releaseDate) {
-                withNext.push(s);
-            } else if (self._isIncomplete(s)) {
-                incomplete.push(s);
-            } else {
-                complete.push(s);
-            }
-        }
-
-        withNext.sort(function (a, b) {
-            return new Date(a.nextEpisode.releaseDate) - new Date(b.nextEpisode.releaseDate);
+        return series.sort(function (a, b) {
+            var aAnalyzed = self._isAnalyzed(a);
+            var bAnalyzed = self._isAnalyzed(b);
+            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
+            if (!aAnalyzed) return a.name.localeCompare(b.name);
+            var diff = self._totalMissing(b) - self._totalMissing(a);
+            if (diff !== 0) return diff;
+            return a.name.localeCompare(b.name);
         });
-        incomplete.sort(function (a, b) { return a.name.localeCompare(b.name); });
-        complete.sort(function (a, b) { return a.name.localeCompare(b.name); });
-        notAnalyzed.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    }
 
-        return withNext.concat(incomplete, complete, notAnalyzed);
+    _sortByRelease(series) {
+        var self = this;
+        return series.sort(function (a, b) {
+            var aAnalyzed = self._isAnalyzed(a);
+            var bAnalyzed = self._isAnalyzed(b);
+            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
+            if (!aAnalyzed) return a.name.localeCompare(b.name);
+            var aRank = self._releaseDateRank(a);
+            var bRank = self._releaseDateRank(b);
+            if (aRank.tier !== bRank.tier) return aRank.tier - bRank.tier;
+            if (aRank.date && bRank.date) return aRank.date.localeCompare(bRank.date);
+            return a.name.localeCompare(b.name);
+        });
+    }
+
+    // Tier 0: concrete date (YYYY-MM-DD or YYYY-MM), Tier 1: year-only, Tier 2: TBA (running, no date), Tier 3: ended
+    _releaseDateRank(s) {
+        if (s.nextEpisode && s.nextEpisode.releaseDate) {
+            var rd = s.nextEpisode.releaseDate;
+            if (rd.length > 4) {
+                return { tier: 0, date: rd };
+            }
+            return { tier: 1, date: rd };
+        }
+        if (s.status === 'ended') {
+            return { tier: 3, date: null };
+        }
+        return { tier: 2, date: null };
     }
 
     _sortByName(series) {
@@ -128,7 +153,6 @@ class ShowHealthTable {
 
         var incomplete = this._isIncomplete(healthResult);
         var opacity = incomplete ? '1' : '0.5';
-        var cursor = incomplete ? 'cursor:pointer;' : '';
 
         row.style.opacity = opacity;
         row.style.cursor = incomplete ? 'pointer' : '';
@@ -141,36 +165,29 @@ class ShowHealthTable {
             arrowCell.innerHTML = '';
         }
 
-        // Status badge
-        var statusCell = row.cells[3];
-        if (healthResult.status === 'ended') {
-            statusCell.innerHTML = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
-        } else {
-            statusCell.innerHTML = '<span style="background:#1a2a3a;color:#42a5f5;padding:2px 8px;border-radius:3px;font-size:0.85em;">Running</span>';
-        }
-
         // Seasons
-        var seasonsCell = row.cells[4];
+        var seasonsCell = row.cells[3];
         var missingSeasons = healthResult.missingSeasons ? healthResult.missingSeasons.length : 0;
         var seasonsColor = missingSeasons > 0 ? 'color:#e5383b;' : '';
         seasonsCell.innerHTML = '<span style="' + seasonsColor + '">' + healthResult.seasonsLocal + '/' + healthResult.seasonsTotal + '</span>';
 
         // Missing
-        var missingCell = row.cells[5];
+        var missingCell = row.cells[4];
         if (!incomplete) {
             missingCell.innerHTML = '<span style="color:#4caf50;">Complete</span>';
         } else {
-            var count = healthResult.missingEpisodes ? healthResult.missingEpisodes.length : 0;
-            missingCell.innerHTML = '<span style="color:#e5383b;">' + count + ' episode' + (count !== 1 ? 's' : '') + '</span>';
+            missingCell.innerHTML = this._renderMissingText(healthResult);
         }
 
-        // Next episode
-        var nextCell = row.cells[6];
+        // Next episode (merged with status)
+        var nextCell = row.cells[5];
         if (healthResult.nextEpisode && healthResult.nextEpisode.releaseDate) {
             nextCell.innerHTML = '<span style="background:#2a2a1a;color:#ffa726;padding:2px 8px;border-radius:3px;font-size:0.85em;">' +
                        this._escapeHtml(healthResult.nextEpisode.releaseDate) + '</span>';
+        } else if (healthResult.status === 'ended') {
+            nextCell.innerHTML = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
         } else {
-            nextCell.innerHTML = '';
+            nextCell.innerHTML = '<span style="background:#2a2a2a;color:#888;padding:2px 8px;border-radius:3px;font-size:0.85em;">TBA</span>';
         }
 
         // Insert detail row if incomplete
@@ -194,6 +211,23 @@ class ShowHealthTable {
                     arrow.style.transform = self._expandedRows[index] ? 'rotate(90deg)' : '';
                 }
             });
+
+            // Bind chip clicks in detail row
+            var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
+            if (detailRow) {
+                var chips = detailRow.querySelectorAll('.showhealth-chip');
+                for (var ci = 0; ci < chips.length; ci++) {
+                    chips[ci].addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        var text = this.getAttribute('data-copy');
+                        if (text) {
+                            navigator.clipboard.writeText(text).then(function () {
+                                Dashboard.alert('Copied: ' + text);
+                            });
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -221,7 +255,6 @@ class ShowHealthTable {
             '<th style="width:30px;padding:8px 4px;"></th>' +
             '<th style="width:54px;padding:8px 4px;"></th>' +
             '<th style="padding:8px;">Series</th>' +
-            '<th style="padding:8px;">Status</th>' +
             '<th style="padding:8px;">Seasons</th>' +
             '<th style="padding:8px;">Missing</th>' +
             '<th style="padding:8px;">Next Episode</th>' +
@@ -242,7 +275,6 @@ class ShowHealthTable {
             '<td style="padding:8px 4px;text-align:center;"></td>' +
             '<td style="padding:8px 4px;">' + poster + '</td>' +
             '<td style="padding:8px;">' + nameCell + '</td>' +
-            '<td style="padding:8px;">' + pendingText + '</td>' +
             '<td style="padding:8px;">' + pendingText + '</td>' +
             '<td style="padding:8px;">' + pendingText + '</td>' +
             '<td style="padding:8px;">' + pendingText + '</td>' +
@@ -270,10 +302,6 @@ class ShowHealthTable {
         var nameCell = '<div>' + this._escapeHtml(s.name) + '</div>' +
                        '<div style="color:#888;font-size:0.85em;">' + yearRange + '</div>';
 
-        var statusBadge = s.status === 'ended'
-            ? '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>'
-            : '<span style="background:#1a2a3a;color:#42a5f5;padding:2px 8px;border-radius:3px;font-size:0.85em;">Running</span>';
-
         var missingSeasons = s.missingSeasons ? s.missingSeasons.length : 0;
         var seasonsColor = missingSeasons > 0 ? 'color:#e5383b;' : '';
         var seasonsCell = '<span style="' + seasonsColor + '">' + s.seasonsLocal + '/' + s.seasonsTotal + '</span>';
@@ -282,21 +310,23 @@ class ShowHealthTable {
         if (!incomplete) {
             missingCell = '<span style="color:#4caf50;">Complete</span>';
         } else {
-            var count = (s.missingEpisodes ? s.missingEpisodes.length : 0);
-            missingCell = '<span style="color:#e5383b;">' + count + ' episode' + (count !== 1 ? 's' : '') + '</span>';
+            missingCell = this._renderMissingText(s);
         }
 
         var nextCell = '';
         if (s.nextEpisode && s.nextEpisode.releaseDate) {
             nextCell = '<span style="background:#2a2a1a;color:#ffa726;padding:2px 8px;border-radius:3px;font-size:0.85em;">' +
                        this._escapeHtml(s.nextEpisode.releaseDate) + '</span>';
+        } else if (s.status === 'ended') {
+            nextCell = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
+        } else {
+            nextCell = '<span style="background:#2a2a2a;color:#888;padding:2px 8px;border-radius:3px;font-size:0.85em;">TBA</span>';
         }
 
         return '<tr data-index="' + index + '" style="border-bottom:1px solid #222;opacity:' + opacity + ';' + (incomplete ? 'cursor:pointer;' : '') + '">' +
             '<td style="padding:8px 4px;text-align:center;">' + arrow + '</td>' +
             '<td style="padding:8px 4px;">' + poster + '</td>' +
             '<td style="padding:8px;">' + nameCell + '</td>' +
-            '<td style="padding:8px;">' + statusBadge + '</td>' +
             '<td style="padding:8px;">' + seasonsCell + '</td>' +
             '<td style="padding:8px;">' + missingCell + '</td>' +
             '<td style="padding:8px;">' + nextCell + '</td>' +
@@ -323,7 +353,7 @@ class ShowHealthTable {
             }
         }
 
-        var detailHtml = '<td colspan="7" style="padding:8px 8px 16px 60px;">';
+        var detailHtml = '<td colspan="6" style="padding:8px 8px 16px 60px;">';
         var seasons = Object.keys(grouped).sort(function (a, b) { return Number(a) - Number(b); });
 
         for (var si = 0; si < seasons.length; si++) {
@@ -335,8 +365,10 @@ class ShowHealthTable {
             for (var ei = 0; ei < eps.length; ei++) {
                 var e = eps[ei];
                 var epNum = 'E' + String(e.episode).padStart(2, '0');
+                var snPad = 'S' + String(sn).padStart(2, '0');
+                var copyText = this._escapeHtml(s.name) + ' ' + snPad + epNum;
                 var title = e.title ? ' \u2014 ' + this._escapeHtml(e.title) : '';
-                detailHtml += '<span style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;">' +
+                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">' +
                               epNum + title + '</span>';
             }
 
@@ -347,8 +379,12 @@ class ShowHealthTable {
             detailHtml += '<div style="margin-bottom:8px;"><strong style="color:#aaa;">Missing Seasons</strong></div>';
             detailHtml += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">';
             for (var mi = 0; mi < s.missingSeasons.length; mi++) {
-                detailHtml += '<span style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;">Season ' +
-                              s.missingSeasons[mi] + '</span>';
+                var ms = s.missingSeasons[mi];
+                var snPad2 = 'S' + String(ms.season).padStart(2, '0');
+                var copyText2 = this._escapeHtml(s.name) + ' ' + snPad2 + ' complete';
+                var epInfo = ms.episodeCount ? ' (' + ms.episodeCount + ' ep)' : '';
+                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText2 + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">Season ' +
+                              ms.season + epInfo + '</span>';
             }
             detailHtml += '</div>';
         }
@@ -384,6 +420,39 @@ class ShowHealthTable {
                 });
             })(rows[i]);
         }
+
+        // Chip click → copy to clipboard
+        var chips = container.querySelectorAll('.showhealth-chip');
+        for (var ci = 0; ci < chips.length; ci++) {
+            chips[ci].addEventListener('click', function (e) {
+                e.stopPropagation();
+                var text = this.getAttribute('data-copy');
+                if (text) {
+                    navigator.clipboard.writeText(text).then(function () {
+                        Dashboard.alert('Copied: ' + text);
+                    });
+                }
+            });
+        }
+    }
+
+    _totalMissing(s) {
+        var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
+        var seasonEps = 0;
+        if (s.missingSeasons) {
+            for (var i = 0; i < s.missingSeasons.length; i++) {
+                seasonEps += s.missingSeasons[i].episodeCount || 0;
+            }
+        }
+        return eps + seasonEps;
+    }
+
+    _renderMissingText(s) {
+        var total = this._totalMissing(s);
+        if (total === 0 && !this._isIncomplete(s)) {
+            return '<span style="color:#4caf50;">Complete</span>';
+        }
+        return '<span style="color:#e5383b;">' + total + ' episode' + (total !== 1 ? 's' : '') + '</span>';
     }
 
     _escapeHtml(text) {
@@ -401,6 +470,7 @@ class ShowHealthPage {
         this._sorter = new ShowHealthSorter();
         this._table = new ShowHealthTable(ApiClient);
         this._currentSort = 'status';
+        this._sortAsc = true;
         this._data = null;
         this._seriesList = [];
         this._analysisResults = {};
@@ -424,7 +494,13 @@ class ShowHealthPage {
                     if (!self._indexingComplete) {
                         return;
                     }
-                    self._currentSort = btn.getAttribute('data-sort');
+                    var mode = btn.getAttribute('data-sort');
+                    if (self._currentSort === mode) {
+                        self._sortAsc = !self._sortAsc;
+                    } else {
+                        self._currentSort = mode;
+                        self._sortAsc = true;
+                    }
                     self._updateSortButtonState();
                     self._renderTable();
                 });
@@ -441,15 +517,19 @@ class ShowHealthPage {
     }
 
     _updateSortButtonState() {
+        var labels = { status: 'By Status', missing: 'By Missing', release: 'By Release', name: 'A-Z' };
         var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
         for (var i = 0; i < buttons.length; i++) {
             var btn = buttons[i];
-            if (btn.getAttribute('data-sort') === this._currentSort) {
+            var mode = btn.getAttribute('data-sort');
+            if (mode === this._currentSort) {
                 btn.style.background = '#00a4dc';
                 btn.style.color = '#fff';
+                btn.textContent = labels[mode] + ' ' + (this._sortAsc ? '\u25B2' : '\u25BC');
             } else {
                 btn.style.background = '';
                 btn.style.color = '';
+                btn.textContent = labels[mode];
             }
         }
     }
@@ -560,7 +640,7 @@ class ShowHealthPage {
             return;
         }
         var container = this._view.querySelector('#showHealthTableContainer');
-        var sorted = this._sorter.sort(this._data.series, this._currentSort);
+        var sorted = this._sorter.sort(this._data.series, this._currentSort, this._sortAsc);
         this._table.render(sorted, container);
     }
 }
