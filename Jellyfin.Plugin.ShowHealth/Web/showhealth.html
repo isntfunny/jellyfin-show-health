@@ -2,7 +2,7 @@
      data-title="Show Health"
      data-controller="__plugin/showhealthjs">
     <div data-role="content">
-        <div class="content-primary">
+        <div class="content-primary" style="max-width:none;">
 
             <!-- Header -->
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1em;">
@@ -11,7 +11,7 @@
             </div>
 
             <!-- Sort bar -->
-            <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;">
+            <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;align-items:center;flex-wrap:wrap;">
                 <button is="emby-button" class="raised" data-sort="status" style="font-size:0.85em;">By Status</button>
                 <button is="emby-button" class="raised" data-sort="missing" style="font-size:0.85em;">By Missing</button>
                 <button is="emby-button" class="raised" data-sort="release" style="font-size:0.85em;">By Release</button>

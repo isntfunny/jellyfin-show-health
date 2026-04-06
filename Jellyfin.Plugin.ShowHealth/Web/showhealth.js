@@ -263,9 +263,9 @@ class ShowHealthTable {
             '<th style="width:30px;padding:8px 4px;"></th>' +
             '<th style="width:54px;padding:8px 4px;"></th>' +
             '<th style="padding:8px;">Series</th>' +
-            '<th style="padding:8px;">Seasons</th>' +
-            '<th style="padding:8px;">Missing</th>' +
-            '<th style="padding:8px;">Next Episode</th>' +
+            '<th style="width:80px;padding:8px;">Seasons</th>' +
+            '<th style="width:120px;padding:8px;">Missing</th>' +
+            '<th style="width:130px;padding:8px;">Next Episode</th>' +
             '</tr></thead><tbody>';
     }
 
@@ -532,6 +532,10 @@ class ShowHealthPage {
         var btn = this._view.querySelector('#showHealthClearCache');
         if (btn) {
             this._clearCacheHandler = async function () {
+                var confirmed = confirm('This could take a while depending on your TV show library size. Are you sure?\n\nOnly do this if you encounter issues.');
+                if (!confirmed) {
+                    return;
+                }
                 btn.disabled = true;
                 btn.textContent = 'Clearing...';
                 try {
