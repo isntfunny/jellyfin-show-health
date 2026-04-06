@@ -75,10 +75,10 @@ public class SeriesHealthResult
     public int SeasonsTotal { get; set; }
 
     /// <summary>
-    /// Gets or sets the list of season numbers that are missing locally.
+    /// Gets or sets the list of seasons that are missing locally.
     /// </summary>
     [JsonPropertyName("missingSeasons")]
-    public List<int> MissingSeasons { get; set; } = new();
+    public List<MissingSeasonInfo> MissingSeasons { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the list of individual missing episodes.
@@ -91,6 +91,24 @@ public class SeriesHealthResult
     /// </summary>
     [JsonPropertyName("nextEpisode")]
     public NextEpisodeInfo? NextEpisode { get; set; }
+}
+
+/// <summary>
+/// Info about a missing season.
+/// </summary>
+public class MissingSeasonInfo
+{
+    /// <summary>
+    /// Gets or sets the season number.
+    /// </summary>
+    [JsonPropertyName("season")]
+    public int Season { get; set; }
+
+    /// <summary>
+    /// Gets or sets the total episode count for this season according to IMDb.
+    /// </summary>
+    [JsonPropertyName("episodeCount")]
+    public int EpisodeCount { get; set; }
 }
 
 /// <summary>

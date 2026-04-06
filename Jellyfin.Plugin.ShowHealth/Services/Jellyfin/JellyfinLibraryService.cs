@@ -258,11 +258,77 @@ public class JellyfinLibraryService
     }
 
     /// <summary>
-    /// Gets all seasons for a specific series.
+    /// Loads all non-virtual episodes for a series in a single query, grouped by season number.
+    /// Use this to avoid N+1 queries when iterating over all seasons.
     /// </summary>
     /// <param name="seriesId">Jellyfin GUID of the series.</param>
+    /// <returns>Dictionary mapping season number to the list of episodes in that season.</returns>
+    public IReadOnlyDictionary<int, IReadOnlyList<JellyfinEpisodeInfo>> GetAllEpisodesForSeries(Guid seriesId)
+    {
+        var query = new InternalItemsQuery
+        {
+            AncestorIds = new[] { seriesId },
+            IncludeItemTypes = new[] { BaseItemKind.Episode },
+            Recursive = true,
+        };
+
+        var result = _libraryManager.QueryItems(query);
+        var grouped = new Dictionary<int, List<JellyfinEpisodeInfo>>();
+
+        foreach (var item in result.Items)
+        {
+            if (item is not Episode episode || episode.IsVirtualItem)
+            {
+                continue;
+            }
+
+            var seasonNum = episode.ParentIndexNumber ?? 0;
+            if (seasonNum <= 0)
+            {
+                continue;
+            }
+
+            if (!grouped.TryGetValue(seasonNum, out var list))
+            {
+                list = new List<JellyfinEpisodeInfo>();
+                grouped[seasonNum] = list;
+            }
+
+            list.Add(new JellyfinEpisodeInfo
+            {
+                Id = episode.Id,
+                Name = episode.Name ?? string.Empty,
+                IndexNumber = episode.IndexNumber,
+                ParentIndexNumber = episode.ParentIndexNumber,
+                ImdbId = GetImdbIdFromItem(episode),
+                PremiereDate = episode.PremiereDate,
+                RunTimeTicks = episode.RunTimeTicks,
+                Overview = episode.Overview,
+                CommunityRating = episode.CommunityRating,
+                SeasonId = episode.SeasonId,
+                SeriesId = episode.SeriesId,
+            });
+        }
+
+        return grouped.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<JellyfinEpisodeInfo>)kvp.Value);
+    }
+
+    /// <summary>
+    /// Gets all seasons for a specific series.
+    /// Accepts a pre-loaded episode dictionary (from <see cref="GetAllEpisodesForSeries"/>) to avoid
+    /// N+1 queries. When null, falls back to per-season episode queries.
+    /// </summary>
+    /// <param name="seriesId">Jellyfin GUID of the series.</param>
+    /// <param name="allEpisodesBySeason">
+    /// Optional pre-loaded episodes grouped by season number.
+    /// If provided, episode counts are derived from this dictionary instead of additional DB queries.
+    /// </param>
     /// <returns>List of seasons, ordered by season number.</returns>
-    public IReadOnlyList<JellyfinSeasonInfo> GetSeasonsForSeries(Guid seriesId)
+    public IReadOnlyList<JellyfinSeasonInfo> GetSeasonsForSeries(
+        Guid seriesId,
+        IReadOnlyDictionary<int, IReadOnlyList<JellyfinEpisodeInfo>>? allEpisodesBySeason = null)
     {
         var query = new InternalItemsQuery
         {
@@ -281,14 +347,32 @@ public class JellyfinLibraryService
                 continue;
             }
 
-            var episodeCount = GetEpisodeCountForSeason(season.Id);
+            int realEpisodeCount;
+            if (allEpisodesBySeason != null)
+            {
+                var seasonIndex = season.IndexNumber ?? 0;
+                realEpisodeCount = allEpisodesBySeason.TryGetValue(seasonIndex, out var preloaded)
+                    ? preloaded.Count
+                    : 0;
+            }
+            else
+            {
+                // Count only non-virtual episodes (actual files on disk)
+                realEpisodeCount = GetRealEpisodeCountForSeason(season.Id, seriesId, season.IndexNumber ?? 0);
+            }
+
+            // Skip seasons with no real episodes (all virtual / metadata-only)
+            if (realEpisodeCount == 0)
+            {
+                continue;
+            }
 
             seasons.Add(new JellyfinSeasonInfo
             {
                 Id = season.Id,
                 Name = season.Name ?? string.Empty,
                 IndexNumber = season.IndexNumber,
-                EpisodeCount = episodeCount,
+                EpisodeCount = realEpisodeCount,
                 SeriesId = seriesId,
             });
         }
@@ -297,12 +381,17 @@ public class JellyfinLibraryService
     }
 
     /// <summary>
-    /// Gets all episodes for a specific season.
+    /// Gets all episodes for a specific season by season GUID.
+    /// Falls back to searching by series ID + season number if no episodes found
+    /// (handles cases where episodes are children of the series, not the season).
     /// </summary>
     /// <param name="seasonId">Jellyfin GUID of the season.</param>
+    /// <param name="seriesId">Jellyfin GUID of the parent series.</param>
+    /// <param name="seasonNumber">The season number to match.</param>
     /// <returns>List of episodes, ordered by episode number.</returns>
-    public IReadOnlyList<JellyfinEpisodeInfo> GetEpisodesForSeason(Guid seasonId)
+    public IReadOnlyList<JellyfinEpisodeInfo> GetEpisodesForSeason(Guid seasonId, Guid seriesId, int seasonNumber)
     {
+        // First try: episodes as direct children of the season
         var query = new InternalItemsQuery
         {
             ParentId = seasonId,
@@ -311,11 +400,37 @@ public class JellyfinLibraryService
         };
 
         var result = _libraryManager.QueryItems(query);
+
+        // Fallback: search all episodes of the series and filter by season number
+        if (result.Items.Count == 0)
+        {
+            query = new InternalItemsQuery
+            {
+                AncestorIds = new[] { seriesId },
+                IncludeItemTypes = new[] { BaseItemKind.Episode },
+                Recursive = true,
+            };
+
+            result = _libraryManager.QueryItems(query);
+        }
+
         var episodes = new List<JellyfinEpisodeInfo>();
 
         foreach (var item in result.Items)
         {
             if (item is not Episode episode)
+            {
+                continue;
+            }
+
+            // Filter by season number
+            if (episode.ParentIndexNumber != seasonNumber)
+            {
+                continue;
+            }
+
+            // Skip virtual episodes (metadata-only, no actual file)
+            if (episode.IsVirtualItem)
             {
                 continue;
             }
@@ -354,6 +469,15 @@ public class JellyfinLibraryService
         };
 
         return _libraryManager.GetCount(query);
+    }
+
+    /// <summary>
+    /// Gets the count of non-virtual episodes for a season (episodes with actual files).
+    /// </summary>
+    private int GetRealEpisodeCountForSeason(Guid seasonId, Guid seriesId, int seasonNumber)
+    {
+        // Reuse the same logic as GetEpisodesForSeason which filters out virtual items
+        return GetEpisodesForSeason(seasonId, seriesId, seasonNumber).Count;
     }
 
     /// <summary>

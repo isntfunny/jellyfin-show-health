@@ -428,6 +428,16 @@ public class ImdbApiClient : IDisposable
     }
 
     /// <summary>
+    /// Removes the cache entry for a specific relative path (e.g. after an imminent release is detected).
+    /// </summary>
+    /// <param name="path">The relative API path used as the cache key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task InvalidateCacheForKeyAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await _cache.RemoveAsync(path, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Removes all expired cache entries.
     /// </summary>
     public async Task<int> CleanExpiredCacheAsync(CancellationToken cancellationToken = default)

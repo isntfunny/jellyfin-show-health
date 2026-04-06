@@ -1,3 +1,5 @@
+using System;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.ShowHealth.Models;
@@ -63,6 +65,11 @@ public class ShowHealthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SeriesHealthResult>> AnalyzeSeries(string imdbId, CancellationToken cancellationToken)
     {
+        if (!Regex.IsMatch(imdbId, @"^tt\d{7,10}$", RegexOptions.None, TimeSpan.FromSeconds(1)))
+        {
+            return BadRequest("Invalid IMDb ID format");
+        }
+
         var result = await _analyzer.AnalyzeSeriesAsync(imdbId, cancellationToken).ConfigureAwait(false);
         if (result == null)
         {

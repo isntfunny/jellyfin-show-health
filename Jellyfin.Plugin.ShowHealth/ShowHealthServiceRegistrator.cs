@@ -26,7 +26,7 @@ public class ShowHealthServiceRegistrator : IPluginServiceRegistrator
             var rateLimiter = sp.GetRequiredService<ImdbApiRateLimiter>();
             return new ImdbApiClient(httpClientFactory, cacheDir, rateLimiter);
         });
-        serviceCollection.AddScoped<JellyfinLibraryService>();
-        serviceCollection.AddScoped<ShowHealthAnalyzer>();
+        serviceCollection.AddTransient<JellyfinLibraryService>();
+        serviceCollection.AddTransient<ShowHealthAnalyzer>();
     }
 }

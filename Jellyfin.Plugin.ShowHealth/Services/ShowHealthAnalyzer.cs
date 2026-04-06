@@ -40,13 +40,25 @@ public class ShowHealthAnalyzer
     public SeriesListResponse GetSeriesList()
     {
         var seriesList = _libraryService.GetSeriesWithImdbId();
-        var items = seriesList.Select(s => new SeriesListItem
+        var items = new List<SeriesListItem>();
+
+        foreach (var s in seriesList)
         {
-            Name = s.Name,
-            JellyfinId = s.Id.ToString("N"),
-            ImdbId = s.ImdbId!,
-            StartYear = s.ProductionYear ?? 0,
-        }).ToList();
+            // Skip series with no real episodes on disk
+            var seasons = _libraryService.GetSeasonsForSeries(s.Id);
+            if (seasons.Count == 0 || seasons.All(season => season.EpisodeCount == 0))
+            {
+                continue;
+            }
+
+            items.Add(new SeriesListItem
+            {
+                Name = s.Name,
+                JellyfinId = s.Id.ToString("N"),
+                ImdbId = s.ImdbId!,
+                StartYear = s.ProductionYear ?? 0,
+            });
+        }
 
         return new SeriesListResponse { Series = items };
     }
@@ -86,7 +98,10 @@ public class ShowHealthAnalyzer
             try
             {
                 var result = await AnalyzeSeriesAsync(series, cancellationToken).ConfigureAwait(false);
-                results.Add(result);
+                if (result != null)
+                {
+                    results.Add(result);
+                }
             }
             catch (Exception ex)
             {
@@ -109,7 +124,7 @@ public class ShowHealthAnalyzer
         return response;
     }
 
-    private async Task<SeriesHealthResult> AnalyzeSeriesAsync(JellyfinSeriesInfo series, CancellationToken cancellationToken)
+    private async Task<SeriesHealthResult?> AnalyzeSeriesAsync(JellyfinSeriesInfo series, CancellationToken cancellationToken)
     {
         var imdbId = series.ImdbId!;
 
@@ -121,8 +136,18 @@ public class ShowHealthAnalyzer
         var title = await titleTask.ConfigureAwait(false);
         var imdbSeasons = await seasonsTask.ConfigureAwait(false);
 
-        // Fetch local seasons
-        var localSeasons = _libraryService.GetSeasonsForSeries(series.Id);
+        // Load ALL local episodes in one query (Fix 3: avoids N+1 per season)
+        var allLocalEpisodesBySeason = _libraryService.GetAllEpisodesForSeries(series.Id);
+
+        // Fetch local seasons using the pre-loaded episode dictionary
+        var localSeasons = _libraryService.GetSeasonsForSeries(series.Id, allLocalEpisodesBySeason);
+
+        // Skip series with no real content (only virtual/metadata items)
+        if (localSeasons.Count == 0 || localSeasons.All(s => s.EpisodeCount == 0))
+        {
+            _logger.LogDebug("Skipping series {Name} — no real episodes on disk", series.Name);
+            return null;
+        }
 
         // Determine which season numbers exist locally (excluding Specials = season 0)
         var localSeasonNumbers = localSeasons
@@ -130,16 +155,21 @@ public class ShowHealthAnalyzer
             .Select(s => s.IndexNumber!.Value)
             .ToHashSet();
 
-        // Parse IMDb season numbers
-        var imdbSeasonNumbers = imdbSeasons.Seasons
-            .Select(s => int.TryParse(s.SeasonNumber, out var n) ? n : -1)
-            .Where(n => n > 0)
+        // Parse IMDb seasons with episode counts
+        var imdbSeasonEntries = imdbSeasons.Seasons
+            .Select(s => new { Num = int.TryParse(s.SeasonNumber, out var n) ? n : -1, s.EpisodeCount })
+            .Where(s => s.Num > 0)
             .ToList();
 
-        // Find missing seasons
-        var missingSeasonNumbers = imdbSeasonNumbers
-            .Where(n => !localSeasonNumbers.Contains(n))
+        var imdbSeasonNumbers = imdbSeasonEntries.Select(s => s.Num).ToList();
+
+        // Find missing seasons with their episode counts
+        var missingSeasonInfos = imdbSeasonEntries
+            .Where(s => !localSeasonNumbers.Contains(s.Num))
+            .Select(s => new MissingSeasonInfo { Season = s.Num, EpisodeCount = s.EpisodeCount })
             .ToList();
+
+        var missingSeasonNumbers = missingSeasonInfos.Select(s => s.Season).ToList();
 
         // Find missing episodes per season
         var missingEpisodes = new List<MissingEpisodeInfo>();
@@ -148,14 +178,11 @@ public class ShowHealthAnalyzer
 
         foreach (var seasonNum in imdbSeasonNumbers)
         {
-            var imdbEpisodes = await _imdbClient.ListTitleEpisodesAsync(
-                imdbId,
-                season: seasonNum.ToString(CultureInfo.InvariantCulture),
-                pageSize: 50,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+            // Fix 1: paginate through all episodes for this season
+            var imdbEpisodes = await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, cancellationToken).ConfigureAwait(false);
 
             // Check for next upcoming episode (across all seasons)
-            foreach (var ep in imdbEpisodes.Episodes)
+            foreach (var ep in imdbEpisodes)
             {
                 if (ep.ReleaseDate != null && IsInFuture(ep.ReleaseDate, now))
                 {
@@ -167,29 +194,33 @@ public class ShowHealthAnalyzer
                         ReleaseDate = FormatDate(ep.ReleaseDate),
                     };
 
+                    // Fix 4: normalize date strings before lexicographic comparison
                     if (nextEpisode == null ||
-                        string.Compare(candidate.ReleaseDate, nextEpisode.ReleaseDate, StringComparison.Ordinal) < 0)
+                        string.Compare(
+                            NormalizeDateForComparison(candidate.ReleaseDate),
+                            NormalizeDateForComparison(nextEpisode.ReleaseDate ?? string.Empty),
+                            StringComparison.Ordinal) < 0)
                     {
                         nextEpisode = candidate;
                     }
                 }
             }
 
-            // If the whole season is missing locally, list all aired episodes as missing
+            // If the whole season is missing locally, keep it as a missing season
+            // but don't list individual episodes (they're implied by the season)
             if (missingSeasonNumbers.Contains(seasonNum))
             {
-                foreach (var ep in imdbEpisodes.Episodes)
+                // Check if there are any confirmed aired episodes.
+                // An episode counts as "aired" only if it has a releaseDate in the past.
+                // No releaseDate = unknown = don't count as aired.
+                var hasAiredEpisodes = imdbEpisodes
+                    .Any(ep => ep.ReleaseDate != null && !IsInFutureOrCurrentYear(ep.ReleaseDate, now));
+
+                if (!hasAiredEpisodes)
                 {
-                    if (ep.ReleaseDate == null || !IsInFuture(ep.ReleaseDate, now))
-                    {
-                        missingEpisodes.Add(new MissingEpisodeInfo
-                        {
-                            Season = seasonNum,
-                            Episode = ep.EpisodeNumber,
-                            Title = ep.Title ?? "TBA",
-                            ImdbId = ep.Id,
-                        });
-                    }
+                    // All episodes are future/current-year-only — don't count this season as missing
+                    missingSeasonNumbers.Remove(seasonNum);
+                    missingSeasonInfos.RemoveAll(s => s.Season == seasonNum);
                 }
 
                 continue;
@@ -201,17 +232,15 @@ public class ShowHealthAnalyzer
                 continue;
             }
 
-            var localSeason = localSeasons.First(s => s.IndexNumber == seasonNum);
-            var localEpisodes = _libraryService.GetEpisodesForSeason(localSeason.Id);
-            var localEpisodeNumbers = localEpisodes
-                .Where(e => e.IndexNumber.HasValue)
-                .Select(e => e.IndexNumber!.Value)
-                .ToHashSet();
+            // Fix 3: use the pre-loaded episode dictionary instead of a separate query
+            var localEpisodeNumbers = allLocalEpisodesBySeason.TryGetValue(seasonNum, out var localEps)
+                ? localEps.Where(e => e.IndexNumber.HasValue).Select(e => e.IndexNumber!.Value).ToHashSet()
+                : new HashSet<int>();
 
-            foreach (var ep in imdbEpisodes.Episodes)
+            foreach (var ep in imdbEpisodes)
             {
-                // Skip future episodes
-                if (ep.ReleaseDate != null && IsInFuture(ep.ReleaseDate, now))
+                // Skip future episodes and episodes with only a year in the current year
+                if (IsInFutureOrCurrentYear(ep.ReleaseDate, now))
                 {
                     continue;
                 }
@@ -229,8 +258,32 @@ public class ShowHealthAnalyzer
             }
         }
 
-        // Determine status: endYear > 0 means the series has ended
+        // Fix 5: seasonsTotal = local seasons + confirmed missing seasons (excludes not-yet-aired)
+        var seasonsTotal = localSeasonNumbers.Count + missingSeasonInfos.Count;
+
+        // Fix 11: invalidate cache for seasons with imminent releases so next scan fetches fresh data
+        if (nextEpisode?.ReleaseDate != null)
+        {
+            var nextDate = ParseDateString(nextEpisode.ReleaseDate);
+            if (nextDate.HasValue && (nextDate.Value - now).TotalDays <= 7)
+            {
+                var seasonPath = $"/titles/{imdbId}/episodes?season={nextEpisode.Season.ToString(CultureInfo.InvariantCulture)}&pageSize=50";
+                await _imdbClient.InvalidateCacheForKeyAsync(seasonPath, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // Determine status: endYear > 0 means the series has ended,
+        // UNLESS there are episodes with a releaseDate after endYear (e.g. reboot/continuation).
         var isEnded = title != null && title.EndYear > 0;
+        if (isEnded && nextEpisode?.ReleaseDate != null)
+        {
+            // Parse year from releaseDate string (format: "YYYY", "YYYY-MM", or "YYYY-MM-DD")
+            if (int.TryParse(nextEpisode.ReleaseDate.AsSpan(0, 4), out var nextYear) && nextYear > title!.EndYear)
+            {
+                isEnded = false;
+            }
+        }
+
         var status = isEnded ? "ended" : "running";
 
         return new SeriesHealthResult
@@ -242,11 +295,94 @@ public class ShowHealthAnalyzer
             EndYear = isEnded ? title!.EndYear : null,
             Status = status,
             SeasonsLocal = localSeasonNumbers.Count,
-            SeasonsTotal = imdbSeasonNumbers.Count,
-            MissingSeasons = missingSeasonNumbers,
+            SeasonsTotal = seasonsTotal,
+            MissingSeasons = missingSeasonInfos,
             MissingEpisodes = missingEpisodes,
             NextEpisode = nextEpisode,
         };
+    }
+
+    /// <summary>
+    /// Fix 1: Fetches all episodes for a season by following nextPageToken pagination.
+    /// </summary>
+    private async Task<List<Episode>> GetAllEpisodesForSeasonAsync(
+        string imdbId,
+        int seasonNum,
+        CancellationToken cancellationToken)
+    {
+        var allEpisodes = new List<Episode>();
+        string? pageToken = null;
+
+        do
+        {
+            var response = await _imdbClient.ListTitleEpisodesAsync(
+                imdbId,
+                season: seasonNum.ToString(CultureInfo.InvariantCulture),
+                pageSize: 50,
+                pageToken: pageToken,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            allEpisodes.AddRange(response.Episodes);
+            pageToken = response.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(pageToken));
+
+        return allEpisodes;
+    }
+
+    /// <summary>
+    /// Fix 4: Pads partial date strings to YYYY-MM-DD for correct lexicographic comparison.
+    /// </summary>
+    private static string NormalizeDateForComparison(string date)
+    {
+        return date.Length switch
+        {
+            4 => date + "-01-01",   // YYYY -> YYYY-01-01
+            7 => date + "-01",      // YYYY-MM -> YYYY-MM-01
+            _ => date,              // YYYY-MM-DD already, or empty
+        };
+    }
+
+    /// <summary>
+    /// Parses a formatted date string (YYYY, YYYY-MM, or YYYY-MM-DD) into a DateTime.
+    /// Returns null if the string cannot be parsed.
+    /// </summary>
+    private static DateTime? ParseDateString(string? dateStr)
+    {
+        if (string.IsNullOrEmpty(dateStr))
+        {
+            return null;
+        }
+
+        var normalized = NormalizeDateForComparison(dateStr);
+        if (DateTime.TryParseExact(normalized, "yyyy-MM-dd", CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result))
+        {
+            return DateTime.SpecifyKind(result, DateTimeKind.Utc);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns true if the episode has not yet aired:
+    /// - releaseDate is in the future, OR
+    /// - releaseDate has only a year (no month/day) and that year is the current year or later.
+    /// Episodes with only a year should not be counted as missing for the entire year.
+    /// </summary>
+    private static bool IsInFutureOrCurrentYear(PrecisionDate? date, DateTime now)
+    {
+        if (date == null || date.Year == 0)
+        {
+            return false;
+        }
+
+        // Only a year, no month/day — treat as "not yet aired" for the entire year
+        if (date.Month == 0 && date.Day == 0)
+        {
+            return date.Year >= now.Year;
+        }
+
+        return IsInFuture(date, now);
     }
 
     private static bool IsInFuture(PrecisionDate date, DateTime now)
@@ -256,10 +392,16 @@ public class ShowHealthAnalyzer
             return false;
         }
 
+        var month = date.Month > 0 ? date.Month : 12;
+
+        // Fix 6: when the day is unknown, use the last day of the month so that an episode with
+        // only a month/year is considered "not yet aired" for the entire month (conservative default).
+        var day = date.Day > 0 ? date.Day : DateTime.DaysInMonth(date.Year, month);
+
         var releaseDate = new DateTime(
             date.Year,
-            date.Month > 0 ? date.Month : 12,
-            date.Day > 0 ? date.Day : 28,
+            month,
+            day,
             0,
             0,
             0,

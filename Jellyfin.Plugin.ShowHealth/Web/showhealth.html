@@ -13,8 +13,14 @@
             <!-- Sort bar -->
             <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;">
                 <button is="emby-button" class="raised" data-sort="status" style="font-size:0.85em;">By Status</button>
-                <button is="emby-button" class="raised" data-sort="urgency" style="font-size:0.85em;">By Urgency</button>
+                <button is="emby-button" class="raised" data-sort="missing" style="font-size:0.85em;">By Missing</button>
+                <button is="emby-button" class="raised" data-sort="release" style="font-size:0.85em;">By Release</button>
                 <button is="emby-button" class="raised" data-sort="name" style="font-size:0.85em;">A-Z</button>
+                <span style="flex:1;"></span>
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.85em;cursor:pointer;">
+                    <input type="checkbox" id="showHealthHideComplete" is="emby-checkbox" />
+                    <span>Hide Complete</span>
+                </label>
             </div>
 
             <!-- Error message -->
