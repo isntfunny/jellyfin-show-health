@@ -1,3 +1,14 @@
+function totalMissing(s) {
+    var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
+    var seasonEps = 0;
+    if (s.missingSeasons) {
+        for (var i = 0; i < s.missingSeasons.length; i++) {
+            seasonEps += s.missingSeasons[i].episodeCount || 0;
+        }
+    }
+    return eps + seasonEps;
+}
+
 class ShowHealthApi {
     constructor(apiClient) {
         this._apiClient = apiClient;
@@ -52,17 +63,6 @@ class ShowHealthSorter {
         return s._analyzed === true;
     }
 
-    _totalMissing(s) {
-        var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
-        var seasonEps = 0;
-        if (s.missingSeasons) {
-            for (var i = 0; i < s.missingSeasons.length; i++) {
-                seasonEps += s.missingSeasons[i].episodeCount || 0;
-            }
-        }
-        return eps + seasonEps;
-    }
-
     _sortByStatus(series) {
         var self = this;
         return series.sort(function (a, b) {
@@ -70,8 +70,8 @@ class ShowHealthSorter {
             var bAnalyzed = self._isAnalyzed(b);
             if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
             if (!aAnalyzed) return a.name.localeCompare(b.name);
-            var aMissing = self._totalMissing(a);
-            var bMissing = self._totalMissing(b);
+            var aMissing = totalMissing(a);
+            var bMissing = totalMissing(b);
             if ((aMissing > 0) !== (bMissing > 0)) return aMissing > 0 ? -1 : 1;
             return a.name.localeCompare(b.name);
         });
@@ -84,7 +84,7 @@ class ShowHealthSorter {
             var bAnalyzed = self._isAnalyzed(b);
             if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
             if (!aAnalyzed) return a.name.localeCompare(b.name);
-            var diff = self._totalMissing(b) - self._totalMissing(a);
+            var diff = totalMissing(b) - totalMissing(a);
             if (diff !== 0) return diff;
             return a.name.localeCompare(b.name);
         });
@@ -197,35 +197,38 @@ class ShowHealthTable {
                 row.insertAdjacentHTML('afterend', detailHtml);
             }
 
-            // Bind click for expand/collapse
-            var self = this;
-            row.addEventListener('click', function () {
-                self._expandedRows[index] = !self._expandedRows[index];
+            // Bind click for expand/collapse (only once per row)
+            if (!row.dataset.hasClickHandler) {
+                row.dataset.hasClickHandler = 'true';
+                var self = this;
+                row.addEventListener('click', function () {
+                    self._expandedRows[index] = !self._expandedRows[index];
+                    var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
+                    var arrow = row.querySelector('.showhealth-arrow');
+
+                    if (detailRow) {
+                        detailRow.style.display = self._expandedRows[index] ? '' : 'none';
+                    }
+                    if (arrow) {
+                        arrow.style.transform = self._expandedRows[index] ? 'rotate(90deg)' : '';
+                    }
+                });
+
+                // Bind chip clicks in detail row
                 var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
-                var arrow = row.querySelector('.showhealth-arrow');
-
                 if (detailRow) {
-                    detailRow.style.display = self._expandedRows[index] ? '' : 'none';
-                }
-                if (arrow) {
-                    arrow.style.transform = self._expandedRows[index] ? 'rotate(90deg)' : '';
-                }
-            });
-
-            // Bind chip clicks in detail row
-            var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
-            if (detailRow) {
-                var chips = detailRow.querySelectorAll('.showhealth-chip');
-                for (var ci = 0; ci < chips.length; ci++) {
-                    chips[ci].addEventListener('click', function (e) {
-                        e.stopPropagation();
-                        var text = this.getAttribute('data-copy');
-                        if (text) {
-                            navigator.clipboard.writeText(text).then(function () {
-                                Dashboard.alert('Copied: ' + text);
-                            });
-                        }
-                    });
+                    var chips = detailRow.querySelectorAll('.showhealth-chip');
+                    for (var ci = 0; ci < chips.length; ci++) {
+                        chips[ci].addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            var text = this.getAttribute('data-copy');
+                            if (text) {
+                                navigator.clipboard.writeText(text).then(function () {
+                                    Dashboard.alert('Copied: ' + text);
+                                });
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -366,7 +369,7 @@ class ShowHealthTable {
                 var e = eps[ei];
                 var epNum = 'E' + String(e.episode).padStart(2, '0');
                 var snPad = 'S' + String(sn).padStart(2, '0');
-                var copyText = this._escapeHtml(s.name) + ' ' + snPad + epNum;
+                var copyText = this._escapeAttr(s.name) + ' ' + snPad + epNum;
                 var title = e.title ? ' \u2014 ' + this._escapeHtml(e.title) : '';
                 detailHtml += '<span class="showhealth-chip" data-copy="' + copyText + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">' +
                               epNum + title + '</span>';
@@ -381,7 +384,7 @@ class ShowHealthTable {
             for (var mi = 0; mi < s.missingSeasons.length; mi++) {
                 var ms = s.missingSeasons[mi];
                 var snPad2 = 'S' + String(ms.season).padStart(2, '0');
-                var copyText2 = this._escapeHtml(s.name) + ' ' + snPad2 + ' complete';
+                var copyText2 = this._escapeAttr(s.name) + ' ' + snPad2 + ' complete';
                 var epInfo = ms.episodeCount ? ' (' + ms.episodeCount + ' ep)' : '';
                 detailHtml += '<span class="showhealth-chip" data-copy="' + copyText2 + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">Season ' +
                               ms.season + epInfo + '</span>';
@@ -436,19 +439,8 @@ class ShowHealthTable {
         }
     }
 
-    _totalMissing(s) {
-        var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
-        var seasonEps = 0;
-        if (s.missingSeasons) {
-            for (var i = 0; i < s.missingSeasons.length; i++) {
-                seasonEps += s.missingSeasons[i].episodeCount || 0;
-            }
-        }
-        return eps + seasonEps;
-    }
-
     _renderMissingText(s) {
-        var total = this._totalMissing(s);
+        var total = totalMissing(s);
         if (total === 0 && !this._isIncomplete(s)) {
             return '<span style="color:#4caf50;">Complete</span>';
         }
@@ -461,6 +453,11 @@ class ShowHealthTable {
         div.textContent = text;
         return div.innerHTML;
     }
+
+    _escapeAttr(text) {
+        if (!text) return '';
+        return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
 }
 
 class ShowHealthPage {
@@ -471,6 +468,7 @@ class ShowHealthPage {
         this._table = new ShowHealthTable(ApiClient);
         this._currentSort = 'status';
         this._sortAsc = true;
+        this._hideComplete = false;
         this._data = null;
         this._seriesList = [];
         this._analysisResults = {};
@@ -479,6 +477,7 @@ class ShowHealthPage {
 
     async init() {
         this._bindSortButtons();
+        this._bindHideComplete();
         this._updateSortButtonState();
         this._setSortButtonsEnabled(false);
         await this._loadData();
@@ -486,14 +485,13 @@ class ShowHealthPage {
 
     _bindSortButtons() {
         var self = this;
+        this._sortHandlers = [];
         var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
 
         for (var i = 0; i < buttons.length; i++) {
             (function (btn) {
-                btn.addEventListener('click', function () {
-                    if (!self._indexingComplete) {
-                        return;
-                    }
+                var handler = function () {
+                    if (!self._indexingComplete) return;
                     var mode = btn.getAttribute('data-sort');
                     if (self._currentSort === mode) {
                         self._sortAsc = !self._sortAsc;
@@ -503,8 +501,36 @@ class ShowHealthPage {
                     }
                     self._updateSortButtonState();
                     self._renderTable();
-                });
+                };
+                btn.addEventListener('click', handler);
+                self._sortHandlers.push({ element: btn, handler: handler });
             })(buttons[i]);
+        }
+    }
+
+    _bindHideComplete() {
+        var self = this;
+        var checkbox = this._view.querySelector('#showHealthHideComplete');
+        if (checkbox) {
+            this._hideCompleteHandler = function () {
+                self._hideComplete = this.checked;
+                self._renderTable();
+            };
+            checkbox.addEventListener('change', this._hideCompleteHandler);
+            this._hideCompleteCheckbox = checkbox;
+        }
+    }
+
+    destroy() {
+        if (this._sortHandlers) {
+            for (var i = 0; i < this._sortHandlers.length; i++) {
+                var h = this._sortHandlers[i];
+                h.element.removeEventListener('click', h.handler);
+            }
+            this._sortHandlers = [];
+        }
+        if (this._hideCompleteCheckbox && this._hideCompleteHandler) {
+            this._hideCompleteCheckbox.removeEventListener('change', this._hideCompleteHandler);
         }
     }
 
@@ -639,15 +665,36 @@ class ShowHealthPage {
         if (!this._data) {
             return;
         }
+        var series = this._data.series;
+        if (this._hideComplete) {
+            series = series.filter(function (s) {
+                if (!s._analyzed) return true;
+                var missing = (s.missingEpisodes && s.missingEpisodes.length > 0) ||
+                              (s.missingSeasons && s.missingSeasons.length > 0);
+                return missing;
+            });
+        }
         var container = this._view.querySelector('#showHealthTableContainer');
-        var sorted = this._sorter.sort(this._data.series, this._currentSort, this._sortAsc);
+        var sorted = this._sorter.sort(series, this._currentSort, this._sortAsc);
         this._table.render(sorted, container);
     }
 }
 
 export default function (view) {
+    var currentPage = null;
+
     view.addEventListener('viewshow', function () {
-        var page = new ShowHealthPage(view);
-        page.init();
+        if (currentPage) {
+            currentPage.destroy();
+        }
+        currentPage = new ShowHealthPage(view);
+        currentPage.init();
+    });
+
+    view.addEventListener('viewhide', function () {
+        if (currentPage) {
+            currentPage.destroy();
+            currentPage = null;
+        }
     });
 }
