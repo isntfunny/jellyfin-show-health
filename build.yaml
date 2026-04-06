@@ -1,16 +1,17 @@
 ---
 name: "Show Health"
 guid: "2626c821-e54b-488a-b316-ea9c5f95e24f"
-version: "1.0.0.0"
+version: "1.1.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
-overview: "Jellyfin plugin skeleton for show quality scoring and display"
+overview: "TV series completeness checker — find missing episodes and seasons"
 description: >
-  Basisprojekt fuer ein Jellyfin-Plugin, das spaeter Show- oder
-  Medienqualitaet auswerten und in Jellyfin verfuegbar machen kann.
+  Jellyfin plugin that checks your TV series library for completeness.
+  Compares local episodes and seasons against IMDb data and reports what is missing.
 category: "General"
-owner: "tecfriends"
+owner: "IsntFunny"
 artifacts:
 - "Jellyfin.Plugin.ShowHealth.dll"
 changelog: >
-  Initial project bootstrap based on the official Jellyfin plugin template.
+  Performance fixes, push notifications, multi-episode support,
+  smart cache invalidation, virtual item filtering.
