@@ -19,7 +19,7 @@ Jellyfin plugin that checks your TV series library for completeness. It compares
 1. In Jellyfin, go to **Dashboard > Plugins > Repositories**
 2. Add a new repository:
    - **Name:** `Show Health`
-   - **URL:** `https://raw.githubusercontent.com/IsntFunny/jellyfin-show-health/main/manifest.json`
+   - **URL:** `https://raw.githubusercontent.com/isntfunny/jellyfin-show-health/master/manifest.json`
 3. Go to **Catalog**, find **Show Health**, and install it
 4. Restart Jellyfin
 
