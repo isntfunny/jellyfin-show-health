@@ -1,7 +1,7 @@
 ---
 name: "Show Health"
 guid: "2626c821-e54b-488a-b316-ea9c5f95e24f"
-version: "1.1.0.0"
+version: "1.2.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "TV series completeness checker — find missing episodes and seasons"
@@ -13,5 +13,7 @@ owner: "IsntFunny"
 artifacts:
 - "Jellyfin.Plugin.ShowHealth.dll"
 changelog: >
-  Performance fixes, push notifications, multi-episode support,
-  smart cache invalidation, virtual item filtering.
+  Fix unnumbered IMDb episodes (EpisodeNumber=0) causing incorrect missing-episode
+  reports for clip shows and specials. Fix SeasonsTotal showing stale counts when
+  not-yet-aired seasons are filtered out. O(1) missing season lookups (HashSet).
+  Remove dead code (ContainsAsync). Deduplicate notification formatting logic.
