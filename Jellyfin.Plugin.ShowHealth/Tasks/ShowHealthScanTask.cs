@@ -194,54 +194,15 @@ public class ShowHealthScanTask : IScheduledTask
     }
 
     private static string FormatNotificationSummary(List<string> newMissing)
-    {
-        // Group by series name
-        var bySeries = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var entry in newMissing)
-        {
-            var pipe = entry.IndexOf('|', StringComparison.Ordinal);
-            if (pipe < 0)
-            {
-                continue;
-            }
-
-            var seriesName = entry[..pipe];
-            var item = entry[(pipe + 1)..];
-
-            if (!bySeries.TryGetValue(seriesName, out var list))
-            {
-                list = new List<string>();
-                bySeries[seriesName] = list;
-            }
-
-            list.Add(item);
-        }
-
-        var parts = new List<string>();
-        foreach (var kvp in bySeries.Take(5))
-        {
-            var items = string.Join(", ", kvp.Value.Take(3));
-            if (kvp.Value.Count > 3)
-            {
-                items += $" +{kvp.Value.Count - 3} more";
-            }
-
-            parts.Add($"{kvp.Key}: {items}");
-        }
-
-        var summary = string.Join("; ", parts);
-        if (bySeries.Count > 5)
-        {
-            summary += $" (+{bySeries.Count - 5} more series)";
-        }
-
-        return $"{newMissing.Count} new missing items — {summary}";
-    }
+        => FormatEntrySummary(newMissing, $"{newMissing.Count} new missing items");
 
     private static string FormatCompletedSummary(List<string> completed)
+        => FormatEntrySummary(completed, $"\ud83c\udf89 {completed.Count} items now complete!");
+
+    private static string FormatEntrySummary(List<string> entries, string header)
     {
         var bySeries = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var entry in completed)
+        foreach (var entry in entries)
         {
             var pipe = entry.IndexOf('|', StringComparison.Ordinal);
             if (pipe < 0)
@@ -279,7 +240,7 @@ public class ShowHealthScanTask : IScheduledTask
             summary += $" (+{bySeries.Count - 5} more series)";
         }
 
-        return $"\ud83c\udf89 {completed.Count} items now complete! {summary}";
+        return $"{header} — {summary}";
     }
 
     private string GetScanFilePath()

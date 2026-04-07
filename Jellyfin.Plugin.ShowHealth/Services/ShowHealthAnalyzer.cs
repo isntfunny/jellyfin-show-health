@@ -143,8 +143,8 @@ public class ShowHealthAnalyzer
             {
                 Total = results.Count,
                 Incomplete = results.Count(r => r.MissingEpisodes.Count > 0 || r.MissingSeasons.Count > 0),
-                Running = results.Count(r => r.Status == "running"),
-                Ended = results.Count(r => r.Status == "ended"),
+                Running = results.Count(r => r.Status == ShowStatus.Running),
+                Ended = results.Count(r => r.Status == ShowStatus.Ended),
             },
         };
 
@@ -164,10 +164,9 @@ public class ShowHealthAnalyzer
 
         var imdbSeasons = await _imdbClient.ListTitleSeasonsAsync(imdbId, cacheTtl: dataTtl, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        // Load ALL local episodes in one query (Fix 3: avoids N+1 per season)
+        // Load all local episodes in one query (avoids N+1 per season)
         var allLocalEpisodesBySeason = _libraryService.GetAllEpisodesForSeries(series.Id);
 
-        // Fetch local seasons using the pre-loaded episode dictionary
         var localSeasons = _libraryService.GetSeasonsForSeries(series.Id, allLocalEpisodesBySeason);
 
         // Skip series with no real content (only virtual/metadata items)
@@ -197,7 +196,7 @@ public class ShowHealthAnalyzer
             .Select(s => new MissingSeasonInfo { Season = s.Num, EpisodeCount = s.EpisodeCount })
             .ToList();
 
-        var missingSeasonNumbers = missingSeasonInfos.Select(s => s.Season).ToList();
+        var missingSeasonNumbers = new HashSet<int>(missingSeasonInfos.Select(s => s.Season));
 
         // Find missing episodes per season
         var missingEpisodes = new List<MissingEpisodeInfo>();
@@ -206,8 +205,9 @@ public class ShowHealthAnalyzer
 
         foreach (var seasonNum in imdbSeasonNumbers)
         {
-            // Fix 1: paginate through all episodes for this season
-            var imdbEpisodes = await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, dataTtl, cancellationToken).ConfigureAwait(false);
+            // EpisodeNumber == 0 means IMDb returned null — unnumbered special/clip show; skip.
+            var imdbEpisodes = (await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, dataTtl, cancellationToken).ConfigureAwait(false))
+                .Where(ep => ep.EpisodeNumber != 0).ToList();
 
             // Check for next upcoming episode (across all seasons)
             foreach (var ep in imdbEpisodes)
@@ -222,7 +222,6 @@ public class ShowHealthAnalyzer
                         ReleaseDate = FormatDate(ep.ReleaseDate),
                     };
 
-                    // Fix 4: normalize date strings before lexicographic comparison
                     if (nextEpisode == null ||
                         string.Compare(
                             NormalizeDateForComparison(candidate.ReleaseDate),
@@ -303,8 +302,6 @@ public class ShowHealthAnalyzer
         }
 
         // Fix 5: seasonsTotal = local seasons + confirmed missing seasons (excludes not-yet-aired)
-        var seasonsTotal = localSeasonNumbers.Count + missingSeasonInfos.Count;
-
         // Invalidate cache for seasons with imminent releases so next scan fetches fresh data.
         // Uses prefix match to catch all paginated cache entries for this season.
         if (nextEpisode?.ReleaseDate != null)
@@ -329,7 +326,7 @@ public class ShowHealthAnalyzer
             }
         }
 
-        var status = isEnded ? "ended" : "running";
+        var status = isEnded ? ShowStatus.Ended : ShowStatus.Running;
 
         return new SeriesHealthResult
         {
@@ -340,16 +337,12 @@ public class ShowHealthAnalyzer
             EndYear = isEnded ? title!.EndYear : null,
             Status = status,
             SeasonsLocal = localSeasonNumbers.Count,
-            SeasonsTotal = seasonsTotal,
             MissingSeasons = missingSeasonInfos,
             MissingEpisodes = missingEpisodes,
             NextEpisode = nextEpisode,
         };
     }
 
-    /// <summary>
-    /// Fix 1: Fetches all episodes for a season by following nextPageToken pagination.
-    /// </summary>
     private async Task<List<Episode>> GetAllEpisodesForSeasonAsync(
         string imdbId,
         int seasonNum,
@@ -378,7 +371,7 @@ public class ShowHealthAnalyzer
     }
 
     /// <summary>
-    /// Fix 4: Pads partial date strings to YYYY-MM-DD for correct lexicographic comparison.
+    /// Pads partial date strings to YYYY-MM-DD for correct lexicographic comparison.
     /// </summary>
     private static string NormalizeDateForComparison(string date)
     {

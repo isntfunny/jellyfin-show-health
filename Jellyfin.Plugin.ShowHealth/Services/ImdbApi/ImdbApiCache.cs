@@ -119,57 +119,6 @@ public class ImdbApiCache : IDisposable
     }
 
     /// <summary>
-    /// Checks if a key exists in the cache and is not expired.
-    /// </summary>
-    public async Task<bool> ContainsAsync(string key, CancellationToken cancellationToken = default)
-    {
-        var filePath = GetFilePath(key);
-
-        if (!File.Exists(filePath))
-        {
-            return false;
-        }
-
-        var keyLock = GetKeyLock(key);
-        await keyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!File.Exists(filePath))
-            {
-                return false;
-            }
-
-            try
-            {
-                var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-                using var doc = JsonDocument.Parse(content);
-
-                if (doc.RootElement.TryGetProperty("ExpiresAt", out var expiresProp))
-                {
-                    var expiresAt = expiresProp.GetDateTimeOffset();
-                    if (expiresAt < DateTimeOffset.UtcNow)
-                    {
-                        File.Delete(filePath);
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-            catch (JsonException)
-            {
-                // Corrupt cache file — treat as absent and evict.
-                TryDeleteFile(filePath);
-                return false;
-            }
-        }
-        finally
-        {
-            keyLock.Release();
-        }
-    }
-
-    /// <summary>
     /// Removes a specific key from the cache.
     /// </summary>
     public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)

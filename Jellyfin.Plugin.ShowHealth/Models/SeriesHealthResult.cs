@@ -60,7 +60,7 @@ public class SeriesHealthResult
     /// Gets or sets the series status (e.g. "running", "ended").
     /// </summary>
     [JsonPropertyName("status")]
-    public string Status { get; set; } = "unknown";
+    public string Status { get; set; } = ShowStatus.Unknown;
 
     /// <summary>
     /// Gets or sets the number of seasons present locally.
@@ -69,10 +69,11 @@ public class SeriesHealthResult
     public int SeasonsLocal { get; set; }
 
     /// <summary>
-    /// Gets or sets the total number of seasons according to the reference source.
+    /// Gets the total number of seasons according to the reference source.
+    /// Derived as local seasons plus confirmed missing seasons (excludes not-yet-aired).
     /// </summary>
     [JsonPropertyName("seasonsTotal")]
-    public int SeasonsTotal { get; set; }
+    public int SeasonsTotal => SeasonsLocal + MissingSeasons.Count;
 
     /// <summary>
     /// Gets or sets the list of seasons that are missing locally.
@@ -211,6 +212,21 @@ public class SeriesListItem
     /// </summary>
     [JsonPropertyName("startYear")]
     public int StartYear { get; set; }
+}
+
+/// <summary>
+/// String constants for series status values.
+/// </summary>
+public static class ShowStatus
+{
+    /// <summary>Series is currently airing.</summary>
+    public const string Running = "running";
+
+    /// <summary>Series has concluded.</summary>
+    public const string Ended = "ended";
+
+    /// <summary>Status could not be determined.</summary>
+    public const string Unknown = "unknown";
 }
 
 /// <summary>

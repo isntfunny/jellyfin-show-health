@@ -364,7 +364,7 @@ public class JellyfinLibraryService
             else
             {
                 // Count only non-virtual episodes (actual files on disk)
-                realEpisodeCount = GetRealEpisodeCountForSeason(season.Id, seriesId, season.IndexNumber ?? 0);
+                realEpisodeCount = GetEpisodesForSeason(season.Id, seriesId, season.IndexNumber ?? 0).Count;
             }
 
             // Skip seasons with no real episodes (all virtual / metadata-only)
@@ -476,15 +476,6 @@ public class JellyfinLibraryService
         };
 
         return _libraryManager.GetCount(query);
-    }
-
-    /// <summary>
-    /// Gets the count of non-virtual episodes for a season (episodes with actual files).
-    /// </summary>
-    private int GetRealEpisodeCountForSeason(Guid seasonId, Guid seriesId, int seasonNumber)
-    {
-        // Reuse the same logic as GetEpisodesForSeason which filters out virtual items
-        return GetEpisodesForSeason(seasonId, seriesId, seasonNumber).Count;
     }
 
     /// <summary>
