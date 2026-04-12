@@ -5,3 +5,4 @@ obj/
 artifacts
 .vscode/settings.json
 .superpowers/
+.playwright-mcp/
