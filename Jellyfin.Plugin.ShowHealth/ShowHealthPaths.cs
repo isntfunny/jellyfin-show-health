@@ -1,0 +1,50 @@
+using System.IO;
+using MediaBrowser.Controller;
+
+namespace Jellyfin.Plugin.ShowHealth;
+
+/// <summary>
+/// Shared file paths used by the controller and scheduled task.
+/// </summary>
+internal static class ShowHealthPaths
+{
+    private const string PluginDir = "ShowHealth";
+    private const string AnalysisSnapshotFile = "last-analysis.json";
+    private const string ScanSnapshotFile = "last-scan.json";
+    private const string IgnoredSeriesFile = "ignored-series.json";
+
+    /// <summary>
+    /// Returns the path to the analysis snapshot JSON file.
+    /// Does NOT create the directory — call <see cref="EnsureDirectory"/> before writing.
+    /// </summary>
+    internal static string GetAnalysisSnapshotPath(IServerApplicationPaths appPaths)
+    {
+        return Path.Combine(appPaths.PluginConfigurationsPath, PluginDir, AnalysisSnapshotFile);
+    }
+
+    /// <summary>
+    /// Returns the path to the scan diff snapshot (used for change detection between runs).
+    /// </summary>
+    internal static string GetScanSnapshotPath(IServerApplicationPaths appPaths)
+    {
+        return Path.Combine(appPaths.PluginConfigurationsPath, PluginDir, ScanSnapshotFile);
+    }
+
+    /// <summary>
+    /// Returns the path to the ignored series JSON file.
+    /// </summary>
+    internal static string GetIgnoredSeriesPath(IServerApplicationPaths appPaths)
+    {
+        return Path.Combine(appPaths.PluginConfigurationsPath, PluginDir, IgnoredSeriesFile);
+    }
+
+    /// <summary>
+    /// Ensures the ShowHealth plugin data directory exists.
+    /// </summary>
+    internal static string EnsureDirectory(IServerApplicationPaths appPaths)
+    {
+        var dir = Path.Combine(appPaths.PluginConfigurationsPath, PluginDir);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+}

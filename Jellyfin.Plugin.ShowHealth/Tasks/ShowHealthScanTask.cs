@@ -70,8 +70,21 @@ public class ShowHealthScanTask : IScheduledTask
         _logger.LogInformation("Starting Show Health scan");
         progress.Report(0);
 
-        var result = await _analyzer.AnalyzeAsync(cancellationToken).ConfigureAwait(false);
+        // Progress 0-85% maps to per-series analysis, 85-100% is snapshot/notification
+        var analyzeProgress = new Progress<double>(pct => progress.Report(pct * 0.85));
+        var result = await _analyzer.AnalyzeAsync(analyzeProgress, cancellationToken).ConfigureAwait(false);
+
+        // Save full analysis result as snapshot for the dashboard (atomic write)
+        ShowHealthPaths.EnsureDirectory(_appPaths);
+        var snapshotPath = ShowHealthPaths.GetAnalysisSnapshotPath(_appPaths);
+        await SaveAnalysisSnapshotAsync(snapshotPath, result).ConfigureAwait(false);
+        _logger.LogInformation("Saved analysis snapshot to {Path}", snapshotPath);
+
         progress.Report(90);
+
+        // Load ignored series to suppress notifications for them
+        var ignoredPath = ShowHealthPaths.GetIgnoredSeriesPath(_appPaths);
+        var ignoredIds = await LoadIgnoredIdsAsync(ignoredPath).ConfigureAwait(false);
 
         var scanFilePath = GetScanFilePath();
         var previousSnapshot = await LoadPreviousSnapshotAsync(scanFilePath).ConfigureAwait(false);
@@ -94,11 +107,15 @@ public class ShowHealthScanTask : IScheduledTask
         }
         else
         {
-            // Find NEW missing items (in current but not in previous)
-            var newMissing = currentSnapshot.Except(previousSnapshot!).ToList();
+            // Find NEW missing items (in current but not in previous), excluding ignored series
+            var newMissing = currentSnapshot.Except(previousSnapshot!)
+                .Where(entry => !IsIgnoredEntry(entry, ignoredIds))
+                .ToList();
 
-            // Find COMPLETED items (were missing before, not anymore)
-            var completed = previousSnapshot!.Except(currentSnapshot).ToList();
+            // Find COMPLETED items (were missing before, not anymore), excluding ignored series
+            var completed = previousSnapshot!.Except(currentSnapshot)
+                .Where(entry => !IsIgnoredEntry(entry, ignoredIds))
+                .ToList();
 
             if (newMissing.Count > 0)
             {
@@ -165,8 +182,8 @@ public class ShowHealthScanTask : IScheduledTask
         [
             new TaskTriggerInfo
             {
-                Type = TaskTriggerInfoType.IntervalTrigger,
-                IntervalTicks = TimeSpan.FromHours(24).Ticks,
+                Type = TaskTriggerInfoType.DailyTrigger,
+                TimeOfDayTicks = TimeSpan.FromHours(3).Ticks,
             },
         ];
     }
@@ -177,16 +194,15 @@ public class ShowHealthScanTask : IScheduledTask
 
         foreach (var series in result.Series)
         {
-            // Missing seasons as "SeriesName|S01 complete"
+            // Format: "imdbId|SeriesName|detail" — imdbId prefix enables ignore filtering
             foreach (var ms in series.MissingSeasons)
             {
-                snapshot.Add($"{series.Name}|S{ms.Season:D2} complete ({ms.EpisodeCount} ep)");
+                snapshot.Add($"{series.ImdbId}|{series.Name}|S{ms.Season:D2} complete ({ms.EpisodeCount} ep)");
             }
 
-            // Missing episodes as "SeriesName|S01E03"
             foreach (var ep in series.MissingEpisodes)
             {
-                snapshot.Add($"{series.Name}|S{ep.Season:D2}E{ep.Episode:D2}");
+                snapshot.Add($"{series.ImdbId}|{series.Name}|S{ep.Season:D2}E{ep.Episode:D2}");
             }
         }
 
@@ -201,17 +217,18 @@ public class ShowHealthScanTask : IScheduledTask
 
     private static string FormatEntrySummary(List<string> entries, string header)
     {
+        // Entry format: "imdbId|SeriesName|detail"
         var bySeries = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var entry in entries)
         {
-            var pipe = entry.IndexOf('|', StringComparison.Ordinal);
-            if (pipe < 0)
+            var parts2 = entry.Split('|', 3);
+            if (parts2.Length < 3)
             {
                 continue;
             }
 
-            var seriesName = entry[..pipe];
-            var item = entry[(pipe + 1)..];
+            var seriesName = parts2[1];
+            var item = parts2[2];
 
             if (!bySeries.TryGetValue(seriesName, out var list))
             {
@@ -243,11 +260,18 @@ public class ShowHealthScanTask : IScheduledTask
         return $"{header} — {summary}";
     }
 
+    private static async Task SaveAnalysisSnapshotAsync(string path, ShowHealthResponse result)
+    {
+        var json = JsonSerializer.Serialize(result, JsonOptions);
+        var tmpPath = path + ".tmp";
+        await File.WriteAllTextAsync(tmpPath, json).ConfigureAwait(false);
+        File.Move(tmpPath, path, overwrite: true);
+    }
+
     private string GetScanFilePath()
     {
-        var dir = Path.Combine(_appPaths.PluginConfigurationsPath, "ShowHealth");
-        Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "last-scan.json");
+        ShowHealthPaths.EnsureDirectory(_appPaths);
+        return ShowHealthPaths.GetScanSnapshotPath(_appPaths);
     }
 
     private async Task<HashSet<string>?> LoadPreviousSnapshotAsync(string path)
@@ -274,5 +298,37 @@ public class ShowHealthScanTask : IScheduledTask
     {
         var json = JsonSerializer.Serialize(snapshot.ToList(), JsonOptions);
         await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Checks if a snapshot entry belongs to an ignored series.
+    /// Entry format: "imdbId|SeriesName|detail".
+    /// </summary>
+    private static bool IsIgnoredEntry(string entry, HashSet<string> ignoredIds)
+    {
+        var pipe = entry.IndexOf('|', StringComparison.Ordinal);
+        if (pipe <= 0)
+        {
+            return false;
+        }
+
+        var imdbId = entry[..pipe];
+        return ignoredIds.Contains(imdbId);
+    }
+
+    private static async Task<HashSet<string>> LoadIgnoredIdsAsync(string path)
+    {
+        try
+        {
+            var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+            var list = JsonSerializer.Deserialize<List<Models.IgnoredSeriesEntry>>(json);
+            return list != null
+                ? new HashSet<string>(list.Select(e => e.ImdbId), StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+        }
+        catch
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
     }
 }
