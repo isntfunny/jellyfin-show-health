@@ -108,12 +108,14 @@ public class ShowHealthAnalyzer
     /// <summary>
     /// Analyzes all series in the Jellyfin library and returns health status.
     /// </summary>
-    public async Task<ShowHealthResponse> AnalyzeAsync(CancellationToken cancellationToken = default)
+    public async Task<ShowHealthResponse> AnalyzeAsync(IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
         var seriesIndex = BuildSeriesIndex(cancellationToken);
-        _logger.LogInformation("Analyzing {Count} series with IMDb IDs", seriesIndex.Count);
+        var total = seriesIndex.Count;
+        _logger.LogInformation("Analyzing {Count} series with IMDb IDs", total);
 
         var results = new List<SeriesHealthResult>();
+        var processed = 0;
 
         foreach (var series in seriesIndex.Values)
         {
@@ -134,6 +136,9 @@ public class ShowHealthAnalyzer
             {
                 _logger.LogWarning(ex, "Failed to analyze series {Name} ({ImdbId})", series.Name, series.ImdbId);
             }
+
+            processed++;
+            progress?.Report((double)processed / total * 100.0);
         }
 
         var response = new ShowHealthResponse
@@ -249,6 +254,29 @@ public class ShowHealthAnalyzer
                     missingSeasonNumbers.Remove(seasonNum);
                     missingSeasonInfos.RemoveAll(s => s.Season == seasonNum);
                 }
+                else
+                {
+                    // Populate individual episode details for this missing season (used by CSV export)
+                    var seasonInfo = missingSeasonInfos.Find(s => s.Season == seasonNum);
+                    if (seasonInfo != null)
+                    {
+                        foreach (var ep in imdbEpisodes)
+                        {
+                            if (ep.EpisodeNumber == 0 || IsInFutureOrCurrentYear(ep.ReleaseDate, now))
+                            {
+                                continue;
+                            }
+
+                            seasonInfo.Episodes.Add(new MissingEpisodeInfo
+                            {
+                                Season = seasonNum,
+                                Episode = ep.EpisodeNumber,
+                                Title = ep.Title ?? "TBA",
+                                ImdbId = ep.Id,
+                            });
+                        }
+                    }
+                }
 
                 continue;
             }
@@ -327,6 +355,28 @@ public class ShowHealthAnalyzer
         }
 
         var status = isEnded ? ShowStatus.Ended : ShowStatus.Running;
+
+        // Classify gaps vs trailing.
+        // A missing season is a "gap" if there is a present season with a HIGHER number.
+        // A missing episode in a present season is ALWAYS a gap (the season is "started").
+        var highestPresentSeason = localSeasonNumbers.Count > 0 ? localSeasonNumbers.Max() : 0;
+
+        foreach (var ms in missingSeasonInfos)
+        {
+            ms.IsGap = ms.Season < highestPresentSeason;
+
+            // Propagate gap flag to individual episode details
+            foreach (var ep in ms.Episodes)
+            {
+                ep.IsGap = ms.IsGap;
+            }
+        }
+
+        foreach (var ep in missingEpisodes)
+        {
+            // Episodes in present seasons are always gaps — the season is started
+            ep.IsGap = true;
+        }
 
         return new SeriesHealthResult
         {

@@ -110,6 +110,18 @@ public class MissingSeasonInfo
     /// </summary>
     [JsonPropertyName("episodeCount")]
     public int EpisodeCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this season is a "gap" (between present seasons) vs trailing at the end.
+    /// </summary>
+    [JsonPropertyName("isGap")]
+    public bool IsGap { get; set; }
+
+    /// <summary>
+    /// Gets or sets the individual episodes in this missing season (for CSV export).
+    /// </summary>
+    [JsonPropertyName("episodes")]
+    public List<MissingEpisodeInfo> Episodes { get; set; } = new();
 }
 
 /// <summary>
@@ -140,6 +152,13 @@ public class MissingEpisodeInfo
     /// </summary>
     [JsonPropertyName("imdbId")]
     public string? ImdbId { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this episode is a "gap" (missing inside a present season) vs trailing.
+    /// Episodes in present seasons are always gaps. Episodes in trailing seasons are not.
+    /// </summary>
+    [JsonPropertyName("isGap")]
+    public bool IsGap { get; set; }
 }
 
 /// <summary>
@@ -212,6 +231,24 @@ public class SeriesListItem
     /// </summary>
     [JsonPropertyName("startYear")]
     public int StartYear { get; set; }
+}
+
+/// <summary>
+/// An entry in the ignored series list.
+/// </summary>
+public class IgnoredSeriesEntry
+{
+    /// <summary>
+    /// Gets or sets the IMDb ID.
+    /// </summary>
+    [JsonPropertyName("imdbId")]
+    public string ImdbId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the series name (for display in the management dialog).
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
 }
 
 /// <summary>
