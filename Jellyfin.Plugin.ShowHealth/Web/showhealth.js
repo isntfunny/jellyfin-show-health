@@ -1,12 +1,47 @@
-function totalMissing(s) {
-    var eps = s.missingEpisodes ? s.missingEpisodes.length : 0;
-    var seasonEps = 0;
-    if (s.missingSeasons) {
-        for (var i = 0; i < s.missingSeasons.length; i++) {
-            seasonEps += s.missingSeasons[i].episodeCount || 0;
+function countGaps(s) {
+    var gaps = 0;
+    if (s.missingEpisodes) {
+        for (var i = 0; i < s.missingEpisodes.length; i++) {
+            if (s.missingEpisodes[i].isGap) gaps++;
         }
     }
-    return eps + seasonEps;
+    if (s.missingSeasons) {
+        for (var i = 0; i < s.missingSeasons.length; i++) {
+            if (s.missingSeasons[i].isGap) gaps += s.missingSeasons[i].episodeCount || 0;
+        }
+    }
+    return gaps;
+}
+
+function countTrailing(s) {
+    var trail = 0;
+    if (s.missingEpisodes) {
+        for (var i = 0; i < s.missingEpisodes.length; i++) {
+            if (!s.missingEpisodes[i].isGap) trail++;
+        }
+    }
+    if (s.missingSeasons) {
+        for (var i = 0; i < s.missingSeasons.length; i++) {
+            if (!s.missingSeasons[i].isGap) trail += s.missingSeasons[i].episodeCount || 0;
+        }
+    }
+    return trail;
+}
+
+function totalMissing(s) {
+    return countGaps(s) + countTrailing(s);
+}
+
+function isIncomplete(s) {
+    return (s.missingEpisodes && s.missingEpisodes.length > 0) ||
+           (s.missingSeasons && s.missingSeasons.length > 0);
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 class ShowHealthApi {
@@ -14,20 +49,33 @@ class ShowHealthApi {
         this._apiClient = apiClient;
     }
 
-    async fetchStatus() {
-        var url = this._apiClient.getUrl('/ShowHealth/Status');
-        var response = await this._apiClient.getJSON(url);
-        return response;
-    }
-
-    async fetchSeries() {
-        var url = this._apiClient.getUrl('/ShowHealth/Series');
+    async fetchSnapshot() {
+        var url = this._apiClient.getUrl('/ShowHealth/Snapshot');
         return await this._apiClient.getJSON(url);
     }
 
-    async analyzeSeries(imdbId) {
-        var url = this._apiClient.getUrl('/ShowHealth/Analyze/' + imdbId);
+    async runScan() {
+        var url = this._apiClient.getUrl('/ShowHealth/RunScan');
+        await this._apiClient.ajax({ type: 'POST', url: url });
+    }
+
+    async fetchIgnored() {
+        var url = this._apiClient.getUrl('/ShowHealth/Ignored');
         return await this._apiClient.getJSON(url);
+    }
+
+    async addIgnored(imdbId, name) {
+        var url = this._apiClient.getUrl('/ShowHealth/Ignored');
+        await this._apiClient.ajax({
+            type: 'POST', url: url,
+            contentType: 'application/json',
+            data: JSON.stringify({ imdbId: imdbId, name: name })
+        });
+    }
+
+    async removeIgnored(imdbId) {
+        var url = this._apiClient.getUrl('/ShowHealth/Ignored/' + imdbId);
+        await this._apiClient.ajax({ type: 'DELETE', url: url });
     }
 
     async clearCache() {
@@ -39,218 +87,85 @@ class ShowHealthApi {
 class ShowHealthSorter {
     sort(series, mode, ascending) {
         var sorted = series.slice();
-
         switch (mode) {
-            case 'status':
-                sorted = this._sortByStatus(sorted);
-                break;
-            case 'missing':
-                sorted = this._sortByMissing(sorted);
-                break;
-            case 'release':
-                sorted = this._sortByRelease(sorted);
-                break;
-            case 'name':
-                sorted = this._sortByName(sorted);
-                break;
-            default:
-                break;
+            case 'status': sorted = this._sortByStatus(sorted); break;
+            case 'gaps': sorted = this._sortByGaps(sorted); break;
+            case 'trailing': sorted = this._sortByTrailing(sorted); break;
+            case 'release': sorted = this._sortByRelease(sorted); break;
+            case 'name': sorted = this._sortByName(sorted); break;
         }
-
-        if (!ascending) {
-            sorted.reverse();
-        }
-
+        if (!ascending) sorted.reverse();
         return sorted;
     }
 
-    _isAnalyzed(s) {
-        return s._analyzed === true;
-    }
-
     _sortByStatus(series) {
-        var self = this;
         return series.sort(function (a, b) {
-            var aAnalyzed = self._isAnalyzed(a);
-            var bAnalyzed = self._isAnalyzed(b);
-            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
-            if (!aAnalyzed) return a.name.localeCompare(b.name);
-            var aMissing = totalMissing(a);
-            var bMissing = totalMissing(b);
-            if ((aMissing > 0) !== (bMissing > 0)) return aMissing > 0 ? -1 : 1;
+            var aM = totalMissing(a), bM = totalMissing(b);
+            if ((aM > 0) !== (bM > 0)) return aM > 0 ? -1 : 1;
             return a.name.localeCompare(b.name);
         });
     }
 
-    _sortByMissing(series) {
-        var self = this;
+    _sortByGaps(series) {
         return series.sort(function (a, b) {
-            var aAnalyzed = self._isAnalyzed(a);
-            var bAnalyzed = self._isAnalyzed(b);
-            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
-            if (!aAnalyzed) return a.name.localeCompare(b.name);
-            var diff = totalMissing(b) - totalMissing(a);
-            if (diff !== 0) return diff;
-            return a.name.localeCompare(b.name);
+            var diff = countGaps(b) - countGaps(a);
+            return diff !== 0 ? diff : a.name.localeCompare(b.name);
+        });
+    }
+
+    _sortByTrailing(series) {
+        return series.sort(function (a, b) {
+            var diff = countTrailing(b) - countTrailing(a);
+            return diff !== 0 ? diff : a.name.localeCompare(b.name);
         });
     }
 
     _sortByRelease(series) {
         var self = this;
         return series.sort(function (a, b) {
-            var aAnalyzed = self._isAnalyzed(a);
-            var bAnalyzed = self._isAnalyzed(b);
-            if (aAnalyzed !== bAnalyzed) return aAnalyzed ? -1 : 1;
-            if (!aAnalyzed) return a.name.localeCompare(b.name);
-            var aRank = self._releaseDateRank(a);
-            var bRank = self._releaseDateRank(b);
-            if (aRank.tier !== bRank.tier) return aRank.tier - bRank.tier;
-            if (aRank.date && bRank.date) return aRank.date.localeCompare(bRank.date);
+            var aR = self._releaseDateRank(a), bR = self._releaseDateRank(b);
+            if (aR.tier !== bR.tier) return aR.tier - bR.tier;
+            if (aR.date && bR.date) return aR.date.localeCompare(bR.date);
             return a.name.localeCompare(b.name);
         });
     }
 
-    // Tier 0: concrete date (YYYY-MM-DD or YYYY-MM), Tier 1: year-only, Tier 2: TBA (running, no date), Tier 3: ended
     _releaseDateRank(s) {
         if (s.nextEpisode && s.nextEpisode.releaseDate) {
             var rd = s.nextEpisode.releaseDate;
-            if (rd.length > 4) {
-                return { tier: 0, date: rd };
-            }
-            return { tier: 1, date: rd };
+            return rd.length > 4 ? { tier: 0, date: rd } : { tier: 1, date: rd };
         }
-        if (s.status === 'ended') {
-            return { tier: 3, date: null };
-        }
-        return { tier: 2, date: null };
+        return s.status === 'ended' ? { tier: 3, date: null } : { tier: 2, date: null };
     }
 
     _sortByName(series) {
-        return series.sort(function (a, b) {
-            return a.name.localeCompare(b.name);
-        });
+        return series.sort(function (a, b) { return a.name.localeCompare(b.name); });
     }
 }
 
 class ShowHealthTable {
-    constructor(apiClient) {
+    constructor(apiClient, onIgnore) {
         this._apiClient = apiClient;
         this._expandedRows = {};
-    }
-
-    renderInitial(seriesList, container) {
-        var html = '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
-        html += this._renderHeader();
-
-        for (var i = 0; i < seriesList.length; i++) {
-            html += this._renderInitialRow(seriesList[i], i);
-        }
-
-        html += '</tbody></table>';
-        container.innerHTML = html;
-    }
-
-    updateRow(index, healthResult, container) {
-        var row = container.querySelector('tr[data-index="' + index + '"]');
-        if (!row) {
-            return;
-        }
-
-        var incomplete = this._isIncomplete(healthResult);
-        var opacity = incomplete ? '1' : '0.5';
-
-        row.style.opacity = opacity;
-        row.style.cursor = incomplete ? 'pointer' : '';
-
-        // Arrow cell
-        var arrowCell = row.cells[0];
-        if (incomplete) {
-            arrowCell.innerHTML = '<span class="showhealth-arrow" style="cursor:pointer;font-size:1.1em;transition:transform 0.2s;display:inline-block;">\u25B6</span>';
-        } else {
-            arrowCell.innerHTML = '';
-        }
-
-        // Seasons
-        var seasonsCell = row.cells[3];
-        var missingSeasons = healthResult.missingSeasons ? healthResult.missingSeasons.length : 0;
-        var seasonsColor = missingSeasons > 0 ? 'color:#e5383b;' : '';
-        seasonsCell.innerHTML = '<span style="' + seasonsColor + '">' + healthResult.seasonsLocal + '/' + healthResult.seasonsTotal + '</span>';
-
-        // Missing
-        var missingCell = row.cells[4];
-        if (!incomplete) {
-            missingCell.innerHTML = '<span style="color:#4caf50;">Complete</span>';
-        } else {
-            missingCell.innerHTML = this._renderMissingText(healthResult);
-        }
-
-        // Next episode (merged with status)
-        var nextCell = row.cells[5];
-        if (healthResult.nextEpisode && healthResult.nextEpisode.releaseDate) {
-            nextCell.innerHTML = '<span style="background:#2a2a1a;color:#ffa726;padding:2px 8px;border-radius:3px;font-size:0.85em;">' +
-                       this._escapeHtml(healthResult.nextEpisode.releaseDate) + '</span>';
-        } else if (healthResult.status === 'ended') {
-            nextCell.innerHTML = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
-        } else {
-            nextCell.innerHTML = '<span style="background:#2a2a2a;color:#888;padding:2px 8px;border-radius:3px;font-size:0.85em;">TBA</span>';
-        }
-
-        // Insert detail row if incomplete
-        if (incomplete) {
-            var detailHtml = this._renderDetailRow(healthResult, index);
-            if (detailHtml) {
-                row.insertAdjacentHTML('afterend', detailHtml);
-            }
-
-            // Bind click for expand/collapse (only once per row)
-            if (!row.dataset.hasClickHandler) {
-                row.dataset.hasClickHandler = 'true';
-                var self = this;
-                row.addEventListener('click', function () {
-                    self._expandedRows[index] = !self._expandedRows[index];
-                    var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
-                    var arrow = row.querySelector('.showhealth-arrow');
-
-                    if (detailRow) {
-                        detailRow.style.display = self._expandedRows[index] ? '' : 'none';
-                    }
-                    if (arrow) {
-                        arrow.style.transform = self._expandedRows[index] ? 'rotate(90deg)' : '';
-                    }
-                });
-
-                // Bind chip clicks in detail row
-                var detailRow = container.querySelector('tr[data-detail-index="' + index + '"]');
-                if (detailRow) {
-                    var chips = detailRow.querySelectorAll('.showhealth-chip');
-                    for (var ci = 0; ci < chips.length; ci++) {
-                        chips[ci].addEventListener('click', function (e) {
-                            e.stopPropagation();
-                            var text = this.getAttribute('data-copy');
-                            if (text) {
-                                navigator.clipboard.writeText(text).then(function () {
-                                    Dashboard.alert('Copied: ' + text);
-                                });
-                            }
-                        });
-                    }
-                }
-            }
-        }
+        this._onIgnore = onIgnore;
     }
 
     render(series, container) {
-        var html = '<table style="width:100%;border-collapse:collapse;font-size:0.9em;">';
-        html += this._renderHeader();
+        var colStyle = 'style="width:14%;padding:8px;"';
+        var html = '<table style="width:100%;border-collapse:collapse;font-size:0.9em;table-layout:fixed;">';
+        html += '<thead><tr style="border-bottom:2px solid #333;text-align:left;">' +
+            '<th style="width:30px;padding:8px 4px;"></th>' +
+            '<th style="width:54px;padding:8px 4px;"></th>' +
+            '<th style="padding:8px;">Show</th>' +
+            '<th ' + colStyle + '>Seasons</th>' +
+            '<th ' + colStyle + '>Gaps</th>' +
+            '<th ' + colStyle + '>Trailing</th>' +
+            '<th ' + colStyle + '>Next Episode</th>' +
+            '</tr></thead><tbody>';
 
         for (var i = 0; i < series.length; i++) {
-            var s = series[i];
-            if (s._analyzed) {
-                html += this._renderSeriesRow(s, i);
-                html += this._renderDetailRow(s, i);
-            } else {
-                html += this._renderInitialRow(s, i);
-            }
+            html += this._renderRow(series[i], i);
+            html += this._renderDetailRow(series[i], i);
         }
 
         html += '</tbody></table>';
@@ -258,44 +173,8 @@ class ShowHealthTable {
         this._bindEvents(container, series);
     }
 
-    _renderHeader() {
-        return '<thead><tr style="border-bottom:2px solid #333;text-align:left;">' +
-            '<th style="width:30px;padding:8px 4px;"></th>' +
-            '<th style="width:54px;padding:8px 4px;"></th>' +
-            '<th style="padding:8px;">Series</th>' +
-            '<th style="width:80px;padding:8px;">Seasons</th>' +
-            '<th style="width:120px;padding:8px;">Missing</th>' +
-            '<th style="width:130px;padding:8px;">Next Episode</th>' +
-            '</tr></thead><tbody>';
-    }
-
-    _renderInitialRow(s, index) {
-        var posterUrl = this._apiClient.getUrl('/Items/' + s.jellyfinId + '/Images/Primary', { height: 54 });
-        var poster = '<img src="' + posterUrl + '" style="height:54px;border-radius:3px;" onerror="this.style.display=\'none\'" />';
-
-        var yearRange = s.startYear ? (s.startYear + '\u2013') : '';
-        var nameCell = '<div>' + this._escapeHtml(s.name) + '</div>' +
-                       '<div style="color:#888;font-size:0.85em;">' + yearRange + '</div>';
-
-        var pendingText = '<span style="color:#888;font-style:italic;">Indizieren...</span>';
-
-        return '<tr data-index="' + index + '" style="border-bottom:1px solid #222;opacity:0.5;">' +
-            '<td style="padding:8px 4px;text-align:center;"></td>' +
-            '<td style="padding:8px 4px;">' + poster + '</td>' +
-            '<td style="padding:8px;">' + nameCell + '</td>' +
-            '<td style="padding:8px;">' + pendingText + '</td>' +
-            '<td style="padding:8px;">' + pendingText + '</td>' +
-            '<td style="padding:8px;">' + pendingText + '</td>' +
-            '</tr>';
-    }
-
-    _isIncomplete(s) {
-        return (s.missingEpisodes && s.missingEpisodes.length > 0) ||
-               (s.missingSeasons && s.missingSeasons.length > 0);
-    }
-
-    _renderSeriesRow(s, index) {
-        var incomplete = this._isIncomplete(s);
+    _renderRow(s, index) {
+        var incomplete = isIncomplete(s);
         var opacity = incomplete ? '1' : '0.5';
         var expanded = this._expandedRows[index];
         var arrow = incomplete
@@ -307,24 +186,28 @@ class ShowHealthTable {
         var poster = '<img src="' + posterUrl + '" style="height:54px;border-radius:3px;" onerror="this.style.display=\'none\'" />';
 
         var yearRange = s.startYear ? (s.startYear + (s.endYear ? '\u2013' + s.endYear : '\u2013')) : '';
-        var nameCell = '<div>' + this._escapeHtml(s.name) + '</div>' +
+        var ignoreBtn = '<span class="showhealth-ignore" data-imdb="' + this._escapeAttr(s.imdbId) + '" data-name="' + this._escapeAttr(s.name) + '" style="cursor:pointer;color:#666;font-size:0.8em;margin-left:6px;" title="Ignore">\u2715</span>';
+        var nameCell = '<div>' + escapeHtml(s.name) + ignoreBtn + '</div>' +
                        '<div style="color:#888;font-size:0.85em;">' + yearRange + '</div>';
 
         var missingSeasons = s.missingSeasons ? s.missingSeasons.length : 0;
         var seasonsColor = missingSeasons > 0 ? 'color:#e5383b;' : '';
         var seasonsCell = '<span style="' + seasonsColor + '">' + s.seasonsLocal + '/' + s.seasonsTotal + '</span>';
 
-        var missingCell;
-        if (!incomplete) {
-            missingCell = '<span style="color:#4caf50;">Complete</span>';
-        } else {
-            missingCell = this._renderMissingText(s);
-        }
+        var gaps = countGaps(s);
+        var gapsCell = gaps > 0
+            ? '<span style="color:#e5383b;">' + gaps + '</span>'
+            : '<span style="color:#4caf50;">\u2014</span>';
+
+        var trailing = countTrailing(s);
+        var trailingCell = trailing > 0
+            ? '<span style="color:#ffa726;">' + trailing + '</span>'
+            : '<span style="color:#4caf50;">\u2014</span>';
 
         var nextCell = '';
         if (s.nextEpisode && s.nextEpisode.releaseDate) {
             nextCell = '<span style="background:#2a2a1a;color:#ffa726;padding:2px 8px;border-radius:3px;font-size:0.85em;">' +
-                       this._escapeHtml(s.nextEpisode.releaseDate) + '</span>';
+                       escapeHtml(s.nextEpisode.releaseDate) + '</span>';
         } else if (s.status === 'ended') {
             nextCell = '<span style="background:#1a3a1a;color:#4caf50;padding:2px 8px;border-radius:3px;font-size:0.85em;">Ended</span>';
         } else {
@@ -335,51 +218,44 @@ class ShowHealthTable {
             '<td style="padding:8px 4px;text-align:center;">' + arrow + '</td>' +
             '<td style="padding:8px 4px;">' + poster + '</td>' +
             '<td style="padding:8px;">' + nameCell + '</td>' +
-            '<td style="padding:8px;">' + seasonsCell + '</td>' +
-            '<td style="padding:8px;">' + missingCell + '</td>' +
-            '<td style="padding:8px;">' + nextCell + '</td>' +
+            '<td style="width:14%;padding:8px;">' + seasonsCell + '</td>' +
+            '<td style="width:14%;padding:8px;">' + gapsCell + '</td>' +
+            '<td style="width:14%;padding:8px;">' + trailingCell + '</td>' +
+            '<td style="width:14%;padding:8px;">' + nextCell + '</td>' +
             '</tr>';
     }
 
     _renderDetailRow(s, index) {
-        var incomplete = this._isIncomplete(s);
-        if (!incomplete) {
-            return '';
-        }
+        if (!isIncomplete(s)) return '';
 
         var display = this._expandedRows[index] ? '' : 'display:none;';
-
         var grouped = {};
         if (s.missingEpisodes) {
             for (var i = 0; i < s.missingEpisodes.length; i++) {
                 var ep = s.missingEpisodes[i];
-                var season = ep.season;
-                if (!grouped[season]) {
-                    grouped[season] = [];
-                }
-                grouped[season].push(ep);
+                if (!grouped[ep.season]) grouped[ep.season] = [];
+                grouped[ep.season].push(ep);
             }
         }
 
-        var detailHtml = '<td colspan="6" style="padding:8px 8px 16px 60px;">';
+        var detailHtml = '<td colspan="7" style="padding:8px 8px 16px 60px;">';
         var seasons = Object.keys(grouped).sort(function (a, b) { return Number(a) - Number(b); });
 
         for (var si = 0; si < seasons.length; si++) {
             var sn = seasons[si];
             detailHtml += '<div style="margin-bottom:8px;"><strong style="color:#aaa;">Season ' + sn + '</strong></div>';
             detailHtml += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">';
-
             var eps = grouped[sn];
             for (var ei = 0; ei < eps.length; ei++) {
                 var e = eps[ei];
                 var epNum = 'E' + String(e.episode).padStart(2, '0');
                 var snPad = 'S' + String(sn).padStart(2, '0');
                 var copyText = this._escapeAttr(s.name) + ' ' + snPad + epNum;
-                var title = e.title ? ' \u2014 ' + this._escapeHtml(e.title) : '';
-                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">' +
+                var title = e.title ? ' \u2014 ' + escapeHtml(e.title) : '';
+                var chipColor = e.isGap ? '#e5383b' : '#ffa726';
+                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText + '" style="border-left:3px solid ' + chipColor + ';padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">' +
                               epNum + title + '</span>';
             }
-
             detailHtml += '</div>';
         }
 
@@ -391,45 +267,35 @@ class ShowHealthTable {
                 var snPad2 = 'S' + String(ms.season).padStart(2, '0');
                 var copyText2 = this._escapeAttr(s.name) + ' ' + snPad2 + ' complete';
                 var epInfo = ms.episodeCount ? ' (' + ms.episodeCount + ' ep)' : '';
-                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText2 + '" style="border-left:3px solid #e5383b;padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">Season ' +
+                var seasonChipColor = ms.isGap ? '#e5383b' : '#ffa726';
+                detailHtml += '<span class="showhealth-chip" data-copy="' + copyText2 + '" style="border-left:3px solid ' + seasonChipColor + ';padding:4px 10px;background:#2a2a2a;border-radius:0 3px 3px 0;font-size:0.85em;cursor:pointer;" title="Click to copy">Season ' +
                               ms.season + epInfo + '</span>';
             }
             detailHtml += '</div>';
         }
 
         detailHtml += '</td>';
-
         return '<tr class="showhealth-detail" data-detail-index="' + index + '" style="' + display + '">' + detailHtml + '</tr>';
     }
 
     _bindEvents(container, series) {
         var self = this;
         var rows = container.querySelectorAll('tr[data-index]');
-
         for (var i = 0; i < rows.length; i++) {
             (function (row) {
                 var idx = parseInt(row.getAttribute('data-index'), 10);
                 var s = series[idx];
-                if (!s._analyzed || !self._isIncomplete(s)) {
-                    return;
-                }
-
+                if (!isIncomplete(s)) return;
                 row.addEventListener('click', function () {
                     self._expandedRows[idx] = !self._expandedRows[idx];
                     var detailRow = container.querySelector('tr[data-detail-index="' + idx + '"]');
                     var arrow = row.querySelector('.showhealth-arrow');
-
-                    if (detailRow) {
-                        detailRow.style.display = self._expandedRows[idx] ? '' : 'none';
-                    }
-                    if (arrow) {
-                        arrow.style.transform = self._expandedRows[idx] ? 'rotate(90deg)' : '';
-                    }
+                    if (detailRow) detailRow.style.display = self._expandedRows[idx] ? '' : 'none';
+                    if (arrow) arrow.style.transform = self._expandedRows[idx] ? 'rotate(90deg)' : '';
                 });
             })(rows[i]);
         }
 
-        // Chip click → copy to clipboard
         var chips = container.querySelectorAll('.showhealth-chip');
         for (var ci = 0; ci < chips.length; ci++) {
             chips[ci].addEventListener('click', function (e) {
@@ -437,26 +303,24 @@ class ShowHealthTable {
                 var text = this.getAttribute('data-copy');
                 if (text) {
                     navigator.clipboard.writeText(text).then(function () {
-                        Dashboard.alert('Copied: ' + text);
+                        Dashboard.alert('Copied:' + text);
                     });
                 }
             });
         }
-    }
 
-    _renderMissingText(s) {
-        var total = totalMissing(s);
-        if (total === 0 && !this._isIncomplete(s)) {
-            return '<span style="color:#4caf50;">Complete</span>';
+        // Ignore buttons
+        var ignoreBtns = container.querySelectorAll('.showhealth-ignore');
+        for (var ii = 0; ii < ignoreBtns.length; ii++) {
+            ignoreBtns[ii].addEventListener('click', function (e) {
+                e.stopPropagation();
+                var imdbId = this.getAttribute('data-imdb');
+                var name = this.getAttribute('data-name');
+                if (self._onIgnore && imdbId) {
+                    self._onIgnore(imdbId, name);
+                }
+            });
         }
-        return '<span style="color:#e5383b;">' + total + ' episode' + (total !== 1 ? 's' : '') + '</span>';
-    }
-
-    _escapeHtml(text) {
-        if (!text) return '';
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     }
 
     _escapeAttr(text) {
@@ -465,127 +329,419 @@ class ShowHealthTable {
     }
 }
 
+class ShowHealthExporter {
+    constructor() {
+        this._dialog = null;
+    }
+
+    show(seriesList) {
+        this._seriesList = seriesList;
+        this._showDialog();
+    }
+
+    _showDialog() {
+        this._removeDialog();
+        var overlay = document.createElement('div');
+        overlay.id = 'showHealthExportOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+        var dialog = document.createElement('div');
+        dialog.style.cssText = 'background:#1a1a1a;border-radius:8px;padding:24px;min-width:320px;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+        dialog.innerHTML =
+            '<h2 style="margin:0 0 16px 0;font-size:1.2em;">CSV Export</h2>' +
+            '<p style="color:#aaa;font-size:0.9em;margin:0 0 16px 0;">Only shows with missing content will be exported.</p>' +
+            '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">' +
+                '<button id="showHealthExportEpisodes" style="padding:12px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">' +
+                    '<strong>All Episodes</strong><br><span style="color:#aaa;font-size:0.85em;">Every missing episode individually \u2014 missing seasons expanded to single episodes</span>' +
+                '</button>' +
+                '<button id="showHealthExportGaps" style="padding:12px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">' +
+                    '<strong>Only Gaps</strong><br><span style="color:#aaa;font-size:0.85em;">Only real gaps \u2014 no trailing content</span>' +
+                '</button>' +
+                '<button id="showHealthExportSeasons" style="padding:12px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">' +
+                    '<strong>By Show</strong><br><span style="color:#aaa;font-size:0.85em;">One row per show \u2014 seasons and episodes summarized</span>' +
+                '</button>' +
+            '</div>' +
+            '<div style="text-align:right;">' +
+                '<button id="showHealthExportCancel" style="padding:8px 20px;background:none;border:1px solid #555;border-radius:4px;color:#aaa;cursor:pointer;">Cancel</button>' +
+            '</div>';
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+        this._dialog = overlay;
+
+        var self = this;
+        overlay.querySelector('#showHealthExportCancel').addEventListener('click', function () { self._removeDialog(); });
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) self._removeDialog(); });
+        overlay.querySelector('#showHealthExportEpisodes').addEventListener('click', function () { self._exportEpisodes(); self._removeDialog(); });
+        overlay.querySelector('#showHealthExportGaps').addEventListener('click', function () { self._exportGaps(); self._removeDialog(); });
+        overlay.querySelector('#showHealthExportSeasons').addEventListener('click', function () { self._exportSeasons(); self._removeDialog(); });
+    }
+
+    _removeDialog() {
+        if (this._dialog) { this._dialog.remove(); this._dialog = null; }
+    }
+
+    _getIncompleteSeries() {
+        return this._seriesList.filter(function (s) { return isIncomplete(s); });
+    }
+
+    _collectEpisodeRows(gapOnly) {
+        var rows = [];
+        var series = this._getIncompleteSeries();
+        for (var i = 0; i < series.length; i++) {
+            var s = series[i];
+            if (s.missingEpisodes) {
+                for (var j = 0; j < s.missingEpisodes.length; j++) {
+                    var ep = s.missingEpisodes[j];
+                    if (gapOnly && !ep.isGap) continue;
+                    rows.push([s.name, 'S' + String(ep.season).padStart(2, '0'), 'E' + String(ep.episode).padStart(2, '0'), ep.title || '', ep.imdbId || '']);
+                }
+            }
+            if (s.missingSeasons) {
+                for (var k = 0; k < s.missingSeasons.length; k++) {
+                    var ms = s.missingSeasons[k];
+                    if (gapOnly && !ms.isGap) continue;
+                    var snPad = 'S' + String(ms.season).padStart(2, '0');
+                    if (ms.episodes && ms.episodes.length > 0) {
+                        for (var ei = 0; ei < ms.episodes.length; ei++) {
+                            var mse = ms.episodes[ei];
+                            rows.push([s.name, snPad, 'E' + String(mse.episode).padStart(2, '0'), mse.title || '', mse.imdbId || '']);
+                        }
+                    } else {
+                        for (var e = 1; e <= (ms.episodeCount || 0); e++) {
+                            rows.push([s.name, snPad, 'E' + String(e).padStart(2, '0'), '', '']);
+                        }
+                    }
+                }
+            }
+        }
+        return rows;
+    }
+
+    _exportEpisodes() {
+        var rows = [['Show', 'Season', 'Episode', 'Title', 'IMDb ID']].concat(this._collectEpisodeRows(false));
+        this._downloadCsv('show-health-episodes.csv', rows);
+    }
+
+    _exportGaps() {
+        var data = this._collectEpisodeRows(true);
+        if (data.length === 0) { Dashboard.alert('No gaps found.'); return; }
+        var rows = [['Show', 'Season', 'Episode', 'Title', 'IMDb ID']].concat(data);
+        this._downloadCsv('show-health-gaps.csv', rows);
+    }
+
+    _exportSeasons() {
+        var rows = [['Show', 'Status', 'Seasons (local/total)', 'Missing Seasons', 'Missing Episodes']];
+        var series = this._getIncompleteSeries();
+        for (var i = 0; i < series.length; i++) {
+            var s = series[i];
+            var msList = (s.missingSeasons || []).map(function (ms) {
+                var info = 'S' + String(ms.season).padStart(2, '0');
+                if (ms.episodeCount) info += ' (' + ms.episodeCount + ' Ep)';
+                return info;
+            }).join(', ');
+            var epsList = (s.missingEpisodes || []).map(function (ep) {
+                return 'S' + String(ep.season).padStart(2, '0') + 'E' + String(ep.episode).padStart(2, '0');
+            }).join(', ');
+            rows.push([s.name, s.status || '', (s.seasonsLocal || 0) + '/' + (s.seasonsTotal || 0), msList, epsList]);
+        }
+        this._downloadCsv('show-health-by-series.csv', rows);
+    }
+
+    _downloadCsv(filename, rows) {
+        var csv = rows.map(function (row) {
+            return row.map(function (cell) {
+                var str = String(cell);
+                if (str.indexOf(',') !== -1 || str.indexOf('"') !== -1 || str.indexOf('\n') !== -1) {
+                    return '"' + str.replace(/"/g, '""') + '"';
+                }
+                return str;
+            }).join(',');
+        }).join('\n');
+        var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+}
+
 class ShowHealthPage {
     constructor(view) {
         this._view = view;
         this._api = new ShowHealthApi(ApiClient);
         this._sorter = new ShowHealthSorter();
-        this._table = new ShowHealthTable(ApiClient);
-        this._currentSort = 'status';
-        this._sortAsc = true;
-        this._hideComplete = false;
+        var self = this;
+        this._table = new ShowHealthTable(ApiClient, function (imdbId, name) {
+            self._ignoreSeries(imdbId, name);
+        });
+        this._exporter = new ShowHealthExporter();
+        var prefs = this._loadPrefs();
+        this._currentSort = prefs.sort || 'status';
+        this._sortAsc = prefs.asc !== false;
+        this._hideComplete = prefs.hideComplete || false;
+        this._hideTrailing = prefs.hideTrailing || false;
         this._data = null;
-        this._seriesList = [];
-        this._analysisResults = {};
-        this._indexingComplete = false;
+        this._ignoredIds = {};
+        this._handlers = [];
     }
 
     async init() {
         this._bindSortButtons();
-        this._bindHideComplete();
-        this._bindClearCache();
+        this._bindSettings();
+        this._bindRunScan();
         this._updateSortButtonState();
-        this._setSortButtonsEnabled(false);
+        await this._loadIgnored();
         await this._loadData();
     }
 
     _bindSortButtons() {
         var self = this;
-        this._sortHandlers = [];
         var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
-
         for (var i = 0; i < buttons.length; i++) {
             (function (btn) {
                 var handler = function () {
-                    if (!self._indexingComplete) return;
+                    if (!self._data) return;
                     var mode = btn.getAttribute('data-sort');
-                    if (self._currentSort === mode) {
-                        self._sortAsc = !self._sortAsc;
-                    } else {
-                        self._currentSort = mode;
-                        self._sortAsc = true;
-                    }
+                    if (self._currentSort === mode) { self._sortAsc = !self._sortAsc; }
+                    else { self._currentSort = mode; self._sortAsc = true; }
+                    self._savePrefs();
                     self._updateSortButtonState();
                     self._renderTable();
                 };
                 btn.addEventListener('click', handler);
-                self._sortHandlers.push({ element: btn, handler: handler });
+                self._handlers.push({ el: btn, ev: 'click', fn: handler });
             })(buttons[i]);
         }
     }
 
-    _bindHideComplete() {
+    _bindSettings() {
         var self = this;
-        var checkbox = this._view.querySelector('#showHealthHideComplete');
-        if (checkbox) {
-            this._hideCompleteHandler = function () {
-                self._hideComplete = this.checked;
-                self._renderTable();
-            };
-            checkbox.addEventListener('change', this._hideCompleteHandler);
-            this._hideCompleteCheckbox = checkbox;
+        var btn = this._view.querySelector('#showHealthSettings');
+        if (!btn) return;
+        var handler = function () { self._showSettingsDialog(); };
+        btn.addEventListener('click', handler);
+        this._handlers.push({ el: btn, ev: 'click', fn: handler });
+    }
+
+    _bindRunScan() {
+        var self = this;
+        var btn = this._view.querySelector('#showHealthRunScan');
+        if (!btn) return;
+        var handler = async function () {
+            btn.disabled = true;
+            btn.textContent = 'Analyzing...';
+            try {
+                await self._api.runScan();
+                Dashboard.alert('Analysis started. Reload the page in a few minutes.');
+            } catch (err) {
+                Dashboard.alert('Error: ' + (err.message || err));
+                btn.disabled = false;
+                btn.textContent = 'Analyze now';
+            }
+        };
+        btn.addEventListener('click', handler);
+        this._handlers.push({ el: btn, ev: 'click', fn: handler });
+    }
+
+    _showSettingsDialog() {
+        var existing = document.getElementById('showHealthSettingsOverlay');
+        if (existing) existing.remove();
+
+        var overlay = document.createElement('div');
+        overlay.id = 'showHealthSettingsOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+        var dialog = document.createElement('div');
+        dialog.style.cssText = 'background:#1a1a1a;border-radius:8px;padding:24px;min-width:340px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+
+        var self = this;
+        dialog.innerHTML =
+            '<h2 style="margin:0 0 20px 0;font-size:1.2em;">Settings</h2>' +
+
+            '<div style="margin-bottom:16px;">' +
+                '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;">' +
+                    '<input type="checkbox" id="shDlgHideComplete" ' + (this._hideComplete ? 'checked' : '') + ' style="width:18px;height:18px;" />' +
+                    '<span>Hide complete</span>' +
+                '</label>' +
+                '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;">' +
+                    '<input type="checkbox" id="shDlgHideTrailing" ' + (this._hideTrailing ? 'checked' : '') + ' style="width:18px;height:18px;" />' +
+                    '<span>Hide trailing</span>' +
+                '</label>' +
+            '</div>' +
+
+            '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">' +
+                '<button id="shDlgExport" style="padding:10px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">CSV Export</button>' +
+                '<button id="shDlgIgnored" style="padding:10px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">Manage ignored shows</button>' +
+                '<button id="shDlgClearCache" style="padding:10px 16px;background:#2a2a2a;border:1px solid #e5383b;border-radius:6px;color:#e5383b;cursor:pointer;text-align:left;font-size:0.9em;">Reset IMDb cache<br><span style="color:#888;font-size:0.85em;">Deletes all cached IMDb responses and forces a full re-fetch. Your Jellyfin library data is never cached. Only use if IMDb data seems wrong.</span></button>' +
+            '</div>' +
+
+            '<div style="text-align:right;">' +
+                '<button id="shDlgClose" style="padding:8px 20px;background:none;border:1px solid #555;border-radius:4px;color:#aaa;cursor:pointer;">Close</button>' +
+            '</div>';
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        // Close
+        var close = function () { overlay.remove(); };
+        dialog.querySelector('#shDlgClose').addEventListener('click', close);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+
+        // Checkboxes
+        dialog.querySelector('#shDlgHideComplete').addEventListener('change', function () {
+            self._hideComplete = this.checked;
+            self._savePrefs();
+            self._renderTable();
+        });
+        dialog.querySelector('#shDlgHideTrailing').addEventListener('change', function () {
+            self._hideTrailing = this.checked;
+            self._savePrefs();
+            self._renderTable();
+        });
+
+        // Export
+        dialog.querySelector('#shDlgExport').addEventListener('click', function () {
+            close();
+            if (self._data) self._exporter.show(self._data.series);
+        });
+
+        // Ignored
+        dialog.querySelector('#shDlgIgnored').addEventListener('click', function () {
+            close();
+            self._showIgnoredDialog();
+        });
+
+        // Clear cache
+        dialog.querySelector('#shDlgClearCache').addEventListener('click', async function () {
+            if (!confirm('Reset all cached IMDb data and re-fetch everything?\n\nThis will take several minutes. Only use if episode/season data seems incorrect.')) return;
+            close();
+            try {
+                await self._api.clearCache();
+                Dashboard.alert('Cache reset, fresh analysis started. Reload in a few minutes.');
+            } catch (err) {
+                Dashboard.alert('Error: ' + (err.message || err));
+            }
+        });
+    }
+
+    async _loadIgnored() {
+        try {
+            var list = await this._api.fetchIgnored();
+            this._ignoredIds = {};
+            for (var i = 0; i < list.length; i++) {
+                this._ignoredIds[list[i].imdbId] = list[i].name;
+            }
+        } catch (e) {
+            this._ignoredIds = {};
         }
     }
 
-    _bindClearCache() {
-        var self = this;
-        var btn = this._view.querySelector('#showHealthClearCache');
-        if (btn) {
-            this._clearCacheHandler = async function () {
-                var confirmed = confirm('This could take a while depending on your TV show library size. Are you sure?\n\nOnly do this if you encounter issues.');
-                if (!confirmed) {
-                    return;
-                }
-                btn.disabled = true;
-                btn.textContent = 'Clearing...';
-                try {
-                    await self._api.clearCache();
-                    Dashboard.alert('Cache cleared — reloading data...');
-                    // Reset state and reload
-                    self._seriesList = [];
-                    self._analysisResults = {};
-                    self._data = null;
-                    self._indexingComplete = false;
-                    self._setSortButtonsEnabled(false);
-                    await self._loadData();
-                } catch (err) {
-                    Dashboard.alert('Failed to clear cache: ' + (err.message || err));
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = 'Clear Cache';
-                }
-            };
-            btn.addEventListener('click', this._clearCacheHandler);
-            this._clearCacheBtn = btn;
+    async _ignoreSeries(imdbId, name) {
+        if (!confirm('Ignore ' + name + '?')) return;
+        try {
+            await this._api.addIgnored(imdbId, name);
+            this._ignoredIds[imdbId] = name;
+            this._renderTable();
+        } catch (e) {
+            Dashboard.alert('Error: ' + (e.message || e));
         }
+    }
+
+    async _unignoreSeries(imdbId) {
+        try {
+            await this._api.removeIgnored(imdbId);
+            delete this._ignoredIds[imdbId];
+            this._renderTable();
+        } catch (e) {
+            Dashboard.alert('Error: ' + (e.message || e));
+        }
+    }
+
+    _showIgnoredDialog() {
+        var existing = document.getElementById('showHealthIgnoredOverlay');
+        if (existing) existing.remove();
+
+        var keys = Object.keys(this._ignoredIds);
+        if (keys.length === 0) {
+            Dashboard.alert('No ignored shows.');
+            return;
+        }
+
+        var overlay = document.createElement('div');
+        overlay.id = 'showHealthIgnoredOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+        var dialog = document.createElement('div');
+        dialog.style.cssText = 'background:#1a1a1a;border-radius:8px;padding:24px;min-width:320px;max-width:480px;max-height:70vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+
+        var html = '<h2 style="margin:0 0 16px 0;font-size:1.2em;">Ignored Shows</h2>';
+        html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">';
+        for (var i = 0; i < keys.length; i++) {
+            var id = keys[i];
+            var name = this._ignoredIds[id];
+            html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#2a2a2a;border-radius:4px;">' +
+                '<span>' + escapeHtml(name) + '</span>' +
+                '<button class="showhealth-unignore" data-imdb="' + id + '" style="background:#1a3a1a;color:#4caf50;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:0.85em;">Restore</button>' +
+                '</div>';
+        }
+        html += '</div>';
+        html += '<div style="text-align:right;"><button id="showHealthIgnoredClose" style="padding:8px 20px;background:none;border:1px solid #555;border-radius:4px;color:#aaa;cursor:pointer;">Close</button></div>';
+
+        dialog.innerHTML = html;
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        var self = this;
+        overlay.querySelector('#showHealthIgnoredClose').addEventListener('click', function () { overlay.remove(); });
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
+
+        var unignoreBtns = dialog.querySelectorAll('.showhealth-unignore');
+        for (var ui = 0; ui < unignoreBtns.length; ui++) {
+            unignoreBtns[ui].addEventListener('click', function () {
+                var id = this.getAttribute('data-imdb');
+                self._unignoreSeries(id);
+                this.closest('div[style]').remove();
+                // Close dialog if empty
+                if (dialog.querySelectorAll('.showhealth-unignore').length === 0) {
+                    overlay.remove();
+                }
+            });
+        }
+    }
+
+    _loadPrefs() {
+        try {
+            var json = localStorage.getItem('showHealthPrefs');
+            return json ? JSON.parse(json) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    _savePrefs() {
+        try {
+            localStorage.setItem('showHealthPrefs', JSON.stringify({
+                sort: this._currentSort,
+                asc: this._sortAsc,
+                hideComplete: this._hideComplete,
+                hideTrailing: this._hideTrailing
+            }));
+        } catch (e) { /* ignore */ }
     }
 
     destroy() {
-        if (this._sortHandlers) {
-            for (var i = 0; i < this._sortHandlers.length; i++) {
-                var h = this._sortHandlers[i];
-                h.element.removeEventListener('click', h.handler);
-            }
-            this._sortHandlers = [];
+        for (var i = 0; i < this._handlers.length; i++) {
+            var h = this._handlers[i];
+            h.el.removeEventListener(h.ev, h.fn);
         }
-        if (this._hideCompleteCheckbox && this._hideCompleteHandler) {
-            this._hideCompleteCheckbox.removeEventListener('change', this._hideCompleteHandler);
-        }
-        if (this._clearCacheBtn && this._clearCacheHandler) {
-            this._clearCacheBtn.removeEventListener('click', this._clearCacheHandler);
-        }
-    }
-
-    _setSortButtonsEnabled(enabled) {
-        var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
-        for (var i = 0; i < buttons.length; i++) {
-            buttons[i].style.opacity = enabled ? '1' : '0.5';
-            buttons[i].style.pointerEvents = enabled ? '' : 'none';
-        }
+        this._handlers = [];
     }
 
     _updateSortButtonState() {
-        var labels = { status: 'By Status', missing: 'By Missing', release: 'By Release', name: 'A-Z' };
+        var labels = { status: 'Status', gaps: 'Gaps', trailing: 'Trailing', release: 'Release', name: 'A-Z' };
         var buttons = this._view.querySelectorAll('#showHealthSortBar button[data-sort]');
         for (var i = 0; i < buttons.length; i++) {
             var btn = buttons[i];
@@ -604,117 +760,46 @@ class ShowHealthPage {
 
     async _loadData() {
         var errorEl = this._view.querySelector('#showHealthError');
+        var firstRunEl = this._view.querySelector('#showHealthFirstRun');
+        var sortBar = this._view.querySelector('#showHealthSortBar');
         errorEl.style.display = 'none';
-
-        var summaryEl = this._view.querySelector('#showHealthSummary');
-        var container = this._view.querySelector('#showHealthTableContainer');
-
-        Dashboard.showLoadingMsg();
+        firstRunEl.style.display = 'none';
 
         try {
-            // Step 1: Fetch series list instantly
-            var response = await this._api.fetchSeries();
-            this._seriesList = response.series;
-            var total = this._seriesList.length;
-
-            Dashboard.hideLoadingMsg();
-
-            // Step 2: Render table immediately with basic data
-            this._table.renderInitial(this._seriesList, container);
-
-            // Step 3: Show initial progress
-            summaryEl.textContent = 'Indizieren... 0/' + total;
-
-            // Step 4: Analyze each series one by one
-            for (var i = 0; i < this._seriesList.length; i++) {
-                var series = this._seriesList[i];
-                try {
-                    var result = await this._api.analyzeSeries(series.imdbId);
-                    this._analysisResults[series.imdbId] = result;
-
-                    // Merge analysis result into series list item
-                    Object.assign(this._seriesList[i], result);
-                    this._seriesList[i]._analyzed = true;
-
-                    // Update row in-place
-                    this._table.updateRow(i, result, container);
-                } catch (err) {
-                    // Mark as analyzed but failed - show as-is
-                    this._seriesList[i]._analyzed = true;
-                    this._seriesList[i].status = 'unknown';
-                    this._seriesList[i].seasonsLocal = 0;
-                    this._seriesList[i].seasonsTotal = 0;
-                    this._seriesList[i].missingEpisodes = [];
-                    this._seriesList[i].missingSeasons = [];
-                    this._table.updateRow(i, this._seriesList[i], container);
-                }
-
-                // Update progress
-                summaryEl.textContent = 'Indizieren... ' + (i + 1) + '/' + total;
-            }
-
-            // Step 5: Show final summary
-            this._indexingComplete = true;
-            this._setSortButtonsEnabled(true);
-            this._buildDataFromResults();
+            var data = await this._api.fetchSnapshot();
+            this._data = data;
+            sortBar.style.display = '';
             this._updateSummary();
             this._renderTable();
         } catch (err) {
-            Dashboard.hideLoadingMsg();
-            errorEl.textContent = 'Failed to load show health data: ' + (err.message || err);
-            errorEl.style.display = 'block';
-        }
-    }
-
-    _buildDataFromResults() {
-        var series = this._seriesList;
-        var incomplete = 0;
-        var running = 0;
-        var ended = 0;
-
-        for (var i = 0; i < series.length; i++) {
-            var s = series[i];
-            if (s._analyzed) {
-                if ((s.missingEpisodes && s.missingEpisodes.length > 0) ||
-                    (s.missingSeasons && s.missingSeasons.length > 0)) {
-                    incomplete++;
-                }
-                if (s.status === 'running') running++;
-                if (s.status === 'ended') ended++;
+            if (err && (err.status === 404 || (err.message && err.message.indexOf('404') !== -1))) {
+                firstRunEl.style.display = '';
+                sortBar.style.display = 'none';
+            } else {
+                errorEl.textContent = 'Failed to load: ' + (err.message || err);
+                errorEl.style.display = 'block';
             }
         }
-
-        this._data = {
-            series: series,
-            summary: {
-                total: series.length,
-                incomplete: incomplete,
-                running: running,
-                ended: ended,
-            },
-        };
     }
 
     _updateSummary() {
         var summaryEl = this._view.querySelector('#showHealthSummary');
-        if (this._data && this._data.summary) {
-            var s = this._data.summary;
-            summaryEl.textContent = s.total + ' series \u00B7 ' + s.incomplete + ' incomplete';
-        }
+        if (!this._data || !this._data.summary) return;
+        var s = this._data.summary;
+        summaryEl.textContent = s.total + ' shows \u00B7 ' + s.incomplete + ' incomplete';
     }
 
     _renderTable() {
-        if (!this._data) {
-            return;
-        }
-        var series = this._data.series;
+        if (!this._data) return;
+        var self = this;
+        var series = this._data.series.filter(function (s) {
+            return !self._ignoredIds[s.imdbId];
+        });
         if (this._hideComplete) {
-            series = series.filter(function (s) {
-                if (!s._analyzed) return true;
-                var missing = (s.missingEpisodes && s.missingEpisodes.length > 0) ||
-                              (s.missingSeasons && s.missingSeasons.length > 0);
-                return missing;
-            });
+            series = series.filter(function (s) { return isIncomplete(s); });
+        }
+        if (this._hideTrailing) {
+            series = series.filter(function (s) { return countGaps(s) > 0 || !isIncomplete(s); });
         }
         var container = this._view.querySelector('#showHealthTableContainer');
         var sorted = this._sorter.sort(series, this._currentSort, this._sortAsc);
@@ -724,19 +809,12 @@ class ShowHealthPage {
 
 export default function (view) {
     var currentPage = null;
-
     view.addEventListener('viewshow', function () {
-        if (currentPage) {
-            currentPage.destroy();
-        }
+        if (currentPage) currentPage.destroy();
         currentPage = new ShowHealthPage(view);
         currentPage.init();
     });
-
     view.addEventListener('viewhide', function () {
-        if (currentPage) {
-            currentPage.destroy();
-            currentPage = null;
-        }
+        if (currentPage) { currentPage.destroy(); currentPage = null; }
     });
 }

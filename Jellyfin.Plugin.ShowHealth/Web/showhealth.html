@@ -10,18 +10,22 @@
                 <span id="showHealthSummary" style="color:#888;font-size:0.9em;"></span>
             </div>
 
-            <!-- Sort bar -->
-            <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;align-items:center;flex-wrap:wrap;">
-                <button is="emby-button" class="raised" data-sort="status" style="font-size:0.85em;">By Status</button>
-                <button is="emby-button" class="raised" data-sort="missing" style="font-size:0.85em;">By Missing</button>
-                <button is="emby-button" class="raised" data-sort="release" style="font-size:0.85em;">By Release</button>
+            <!-- Toolbar: Sort buttons + Settings -->
+            <div id="showHealthSortBar" style="display:flex;gap:8px;margin-bottom:1em;align-items:center;">
+                <button is="emby-button" class="raised" data-sort="status" style="font-size:0.85em;">Status</button>
+                <button is="emby-button" class="raised" data-sort="gaps" style="font-size:0.85em;">Gaps</button>
+                <button is="emby-button" class="raised" data-sort="trailing" style="font-size:0.85em;">Trailing</button>
+                <button is="emby-button" class="raised" data-sort="release" style="font-size:0.85em;">Release</button>
                 <button is="emby-button" class="raised" data-sort="name" style="font-size:0.85em;">A-Z</button>
                 <span style="flex:1;"></span>
-                <label style="display:flex;align-items:center;gap:6px;font-size:0.85em;cursor:pointer;">
-                    <input type="checkbox" id="showHealthHideComplete" is="emby-checkbox" />
-                    <span>Hide Complete</span>
-                </label>
-                <button is="emby-button" id="showHealthClearCache" class="raised" style="font-size:0.85em;background:#3a1a1a;color:#e5383b;">Clear Cache</button>
+                <button is="emby-button" id="showHealthSettings" class="raised" style="font-size:0.85em;">Settings</button>
+            </div>
+
+            <!-- First-run / no snapshot message -->
+            <div id="showHealthFirstRun" style="display:none;padding:2em;text-align:center;">
+                <p style="color:#aaa;font-size:1.1em;margin-bottom:1em;">No analysis available yet.</p>
+                <p style="color:#666;font-size:0.9em;margin-bottom:1.5em;">The task runs automatically every 24h, or start it manually now.</p>
+                <button is="emby-button" id="showHealthRunScan" class="raised" style="font-size:1em;padding:10px 24px;">Analyze now</button>
             </div>
 
             <!-- Error message -->
