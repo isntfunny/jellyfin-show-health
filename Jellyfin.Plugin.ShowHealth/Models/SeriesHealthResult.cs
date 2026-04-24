@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -43,6 +44,36 @@ public class SeriesHealthResult
     /// </summary>
     [JsonPropertyName("imdbId")]
     public string ImdbId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the TVDB ID.
+    /// </summary>
+    [JsonPropertyName("tvdbId")]
+    public string? TvdbId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the genres.
+    /// </summary>
+    [JsonPropertyName("genres")]
+    public IReadOnlyList<string> Genres { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets the production studios.
+    /// </summary>
+    [JsonPropertyName("studios")]
+    public IReadOnlyList<string> Studios { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets the community rating (0-10).
+    /// </summary>
+    [JsonPropertyName("communityRating")]
+    public float? CommunityRating { get; set; }
+
+    /// <summary>
+    /// Gets or sets the series overview/plot summary.
+    /// </summary>
+    [JsonPropertyName("overview")]
+    public string? Overview { get; set; }
 
     /// <summary>
     /// Gets or sets the year the series started.
