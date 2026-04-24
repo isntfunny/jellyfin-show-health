@@ -15,4 +15,5 @@ artifacts:
 changelog: >
   Fix: scan task no longer sends push messages to active sessions, which was
   crashing playback on Android TV clients. Notifications still appear in the
-  Jellyfin activity log via the standard mechanism.
+  Jellyfin activity log via the standard mechanism. Add tvdbId, genres,
+  studios, communityRating, and overview to the series API response.
