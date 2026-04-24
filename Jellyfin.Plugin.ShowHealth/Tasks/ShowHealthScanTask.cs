@@ -9,9 +9,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.ShowHealth.Models;
 using Jellyfin.Plugin.ShowHealth.Services;
 using MediaBrowser.Controller;
-using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Activity;
-using MediaBrowser.Model.Session;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -31,7 +29,6 @@ public class ShowHealthScanTask : IScheduledTask
 
     private readonly ShowHealthAnalyzer _analyzer;
     private readonly IActivityManager _activityManager;
-    private readonly ISessionManager _sessionManager;
     private readonly IServerApplicationPaths _appPaths;
     private readonly ILogger<ShowHealthScanTask> _logger;
 
@@ -41,13 +38,11 @@ public class ShowHealthScanTask : IScheduledTask
     public ShowHealthScanTask(
         ShowHealthAnalyzer analyzer,
         IActivityManager activityManager,
-        ISessionManager sessionManager,
         IServerApplicationPaths appPaths,
         ILogger<ShowHealthScanTask> logger)
     {
         _analyzer = analyzer;
         _activityManager = activityManager;
-        _sessionManager = sessionManager;
         _appPaths = appPaths;
         _logger = logger;
     }
@@ -132,12 +127,6 @@ public class ShowHealthScanTask : IScheduledTask
                 {
                     Overview = summary,
                 }).ConfigureAwait(false);
-
-                // Push notification to all admin sessions (browser, apps)
-                await _sessionManager.SendMessageToAdminSessions(
-                    SessionMessageType.ActivityLogEntry,
-                    new { Header = "Show Health", Text = summary },
-                    cancellationToken).ConfigureAwait(false);
             }
 
             if (completed.Count > 0)
@@ -155,12 +144,6 @@ public class ShowHealthScanTask : IScheduledTask
                 {
                     Overview = summary,
                 }).ConfigureAwait(false);
-
-                // Push notification to all admin sessions
-                await _sessionManager.SendMessageToAdminSessions(
-                    SessionMessageType.ActivityLogEntry,
-                    new { Header = "Show Health", Text = summary },
-                    cancellationToken).ConfigureAwait(false);
             }
 
             if (newMissing.Count == 0 && completed.Count == 0)
