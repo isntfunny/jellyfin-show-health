@@ -91,7 +91,7 @@ public class ShowHealthController : ControllerBase
 
     /// <summary>
     /// Gets the health status of all TV series in the library (live, slow).
-    /// Compares local episodes/seasons against IMDb data.
+    /// Compares local episodes/seasons against TVmaze data.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Health status for all series.</returns>
@@ -104,7 +104,7 @@ public class ShowHealthController : ControllerBase
     }
 
     /// <summary>
-    /// Returns all series from the Jellyfin library instantly (no IMDb calls).
+    /// Returns all series from the Jellyfin library instantly (no TVmaze calls).
     /// </summary>
     /// <returns>List of series with basic Jellyfin data.</returns>
     [HttpGet("Series")]
@@ -116,7 +116,7 @@ public class ShowHealthController : ControllerBase
     }
 
     /// <summary>
-    /// Clears all IMDb API cache entries.
+    /// Clears all TVmaze API cache entries.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>No content on success.</returns>
@@ -147,7 +147,7 @@ public class ShowHealthController : ControllerBase
     }
 
     /// <summary>
-    /// Analyzes a single series against IMDb by its IMDb ID.
+    /// Analyzes a single series against TVmaze by its IMDb ID.
     /// </summary>
     /// <param name="imdbId">The IMDb ID (e.g. tt1234567).</param>
     /// <param name="cancellationToken">Cancellation token.</param>

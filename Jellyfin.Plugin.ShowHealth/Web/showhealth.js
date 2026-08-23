@@ -394,7 +394,7 @@ class ShowHealthExporter {
                 for (var j = 0; j < s.missingEpisodes.length; j++) {
                     var ep = s.missingEpisodes[j];
                     if (gapOnly && !ep.isGap) continue;
-                    rows.push([s.name, 'S' + String(ep.season).padStart(2, '0'), 'E' + String(ep.episode).padStart(2, '0'), ep.title || '', ep.imdbId || '']);
+                    rows.push([s.name, 'S' + String(ep.season).padStart(2, '0'), 'E' + String(ep.episode).padStart(2, '0'), ep.title || '', ep.tvMazeId || '']);
                 }
             }
             if (s.missingSeasons) {
@@ -405,7 +405,7 @@ class ShowHealthExporter {
                     if (ms.episodes && ms.episodes.length > 0) {
                         for (var ei = 0; ei < ms.episodes.length; ei++) {
                             var mse = ms.episodes[ei];
-                            rows.push([s.name, snPad, 'E' + String(mse.episode).padStart(2, '0'), mse.title || '', mse.imdbId || '']);
+                            rows.push([s.name, snPad, 'E' + String(mse.episode).padStart(2, '0'), mse.title || '', mse.tvMazeId || '']);
                         }
                     } else {
                         for (var e = 1; e <= (ms.episodeCount || 0); e++) {
@@ -419,14 +419,14 @@ class ShowHealthExporter {
     }
 
     _exportEpisodes() {
-        var rows = [['Show', 'Season', 'Episode', 'Title', 'IMDb ID']].concat(this._collectEpisodeRows(false));
+        var rows = [['Show', 'Season', 'Episode', 'Title', 'TVmaze ID']].concat(this._collectEpisodeRows(false));
         this._downloadCsv('show-health-episodes.csv', rows);
     }
 
     _exportGaps() {
         var data = this._collectEpisodeRows(true);
         if (data.length === 0) { Dashboard.alert('No gaps found.'); return; }
-        var rows = [['Show', 'Season', 'Episode', 'Title', 'IMDb ID']].concat(data);
+        var rows = [['Show', 'Season', 'Episode', 'Title', 'TVmaze ID']].concat(data);
         this._downloadCsv('show-health-gaps.csv', rows);
     }
 
@@ -575,7 +575,7 @@ class ShowHealthPage {
             '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">' +
                 '<button id="shDlgExport" style="padding:10px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">CSV Export</button>' +
                 '<button id="shDlgIgnored" style="padding:10px 16px;background:#2a2a2a;border:1px solid #444;border-radius:6px;color:#fff;cursor:pointer;text-align:left;font-size:0.9em;">Manage ignored shows</button>' +
-                '<button id="shDlgClearCache" style="padding:10px 16px;background:#2a2a2a;border:1px solid #e5383b;border-radius:6px;color:#e5383b;cursor:pointer;text-align:left;font-size:0.9em;">Reset IMDb cache<br><span style="color:#888;font-size:0.85em;">Deletes all cached IMDb responses and forces a full re-fetch. Your Jellyfin library data is never cached. Only use if IMDb data seems wrong.</span></button>' +
+                '<button id="shDlgClearCache" style="padding:10px 16px;background:#2a2a2a;border:1px solid #e5383b;border-radius:6px;color:#e5383b;cursor:pointer;text-align:left;font-size:0.9em;">Reset TVmaze cache<br><span style="color:#888;font-size:0.85em;">Deletes all cached TVmaze responses and forces a full re-fetch. Your Jellyfin library data is never cached. Only use if TVmaze data seems wrong.</span></button>' +
             '</div>' +
 
             '<div style="text-align:right;">' +
@@ -616,7 +616,7 @@ class ShowHealthPage {
 
         // Clear cache
         dialog.querySelector('#shDlgClearCache').addEventListener('click', async function () {
-            if (!confirm('Reset all cached IMDb data and re-fetch everything?\n\nThis will take several minutes. Only use if episode/season data seems incorrect.')) return;
+            if (!confirm('Reset all cached TVmaze data and re-fetch everything?\n\nThis will take several minutes. Only use if episode/season data seems incorrect.')) return;
             close();
             try {
                 await self._api.clearCache();

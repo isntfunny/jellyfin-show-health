@@ -1,8 +1,7 @@
-using System.IO;
 using System.Net.Http;
 using Jellyfin.Plugin.ShowHealth.Services;
-using Jellyfin.Plugin.ShowHealth.Services.ImdbApi;
 using Jellyfin.Plugin.ShowHealth.Services.Jellyfin;
+using Jellyfin.Plugin.ShowHealth.Services.TvMaze;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,14 +16,15 @@ public class ShowHealthServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
-        serviceCollection.AddSingleton<ImdbApiRateLimiter>();
-        serviceCollection.AddSingleton<ImdbApiClient>(sp =>
+        serviceCollection.AddSingleton<TvMazeRateLimiter>();
+        serviceCollection.AddSingleton<TvMazeClient>(sp =>
         {
             var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
             var appPaths = sp.GetRequiredService<IServerApplicationPaths>();
-            var cacheDir = Path.Combine(appPaths.PluginConfigurationsPath, "ShowHealth", "cache");
-            var rateLimiter = sp.GetRequiredService<ImdbApiRateLimiter>();
-            return new ImdbApiClient(httpClientFactory, cacheDir, rateLimiter);
+            ShowHealthPaths.RemoveLegacyImdbCache(appPaths);
+            var cacheDir = ShowHealthPaths.GetCacheDirectory(appPaths);
+            var rateLimiter = sp.GetRequiredService<TvMazeRateLimiter>();
+            return new TvMazeClient(httpClientFactory, cacheDir, rateLimiter);
         });
         serviceCollection.AddSingleton<JellyfinLibraryService>();
         serviceCollection.AddSingleton<ShowHealthAnalyzer>();

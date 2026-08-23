@@ -46,6 +46,12 @@ public class SeriesHealthResult
     public string ImdbId { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the TVmaze show ID the series was matched against.
+    /// </summary>
+    [JsonPropertyName("tvMazeId")]
+    public int? TvMazeId { get; set; }
+
+    /// <summary>
     /// Gets or sets the TVDB ID.
     /// </summary>
     [JsonPropertyName("tvdbId")]
@@ -179,10 +185,10 @@ public class MissingEpisodeInfo
     public string Title { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the IMDb ID for this episode, if available.
+    /// Gets or sets the TVmaze episode ID, if available.
     /// </summary>
-    [JsonPropertyName("imdbId")]
-    public string? ImdbId { get; set; }
+    [JsonPropertyName("tvMazeId")]
+    public int? TvMazeId { get; set; }
 
     /// <summary>
     /// Gets or sets whether this episode is a "gap" (missing inside a present season) vs trailing.

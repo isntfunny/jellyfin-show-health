@@ -54,7 +54,7 @@ public class ShowHealthScanTask : IScheduledTask
     public string Key => "ShowHealthScan";
 
     /// <inheritdoc />
-    public string Description => "Scans TV series library for missing episodes and seasons by comparing against IMDb data.";
+    public string Description => "Scans TV series library for missing episodes and seasons by comparing against TVmaze data.";
 
     /// <inheritdoc />
     public string Category => "Show Health";

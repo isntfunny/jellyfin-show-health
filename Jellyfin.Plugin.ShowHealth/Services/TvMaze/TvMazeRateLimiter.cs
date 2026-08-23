@@ -3,24 +3,28 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Jellyfin.Plugin.ShowHealth.Services.ImdbApi;
+namespace Jellyfin.Plugin.ShowHealth.Services.TvMaze;
 
 /// <summary>
-/// Rate limiter for the IMDb API.
-/// Enforces 50 requests per 10s window with max concurrent requests.
+/// Rate limiter for the TVmaze API.
+/// TVmaze allows at least 20 calls per 10s window per IP; we stay at that documented
+/// floor and cap concurrency, because exceeding it results in a temporary IP ban.
 /// </summary>
-public class ImdbApiRateLimiter : IDisposable
+public class TvMazeRateLimiter : IDisposable
 {
+    private const int MaxRequestsPerWindow = 20;
+    private static readonly TimeSpan Window = TimeSpan.FromSeconds(10);
+
     private readonly SemaphoreSlim _concurrencySemaphore;
     private readonly object _lock = new();
     private readonly Queue<DateTimeOffset> _timestamps = new();
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="ImdbApiRateLimiter"/> class.
+    /// Initializes a new instance of the <see cref="TvMazeRateLimiter"/> class.
     /// </summary>
-    /// <param name="maxConcurrent">Maximum concurrent requests (default: 4).</param>
-    public ImdbApiRateLimiter(int maxConcurrent = 4)
+    /// <param name="maxConcurrent">Maximum concurrent requests (default: 2).</param>
+    public TvMazeRateLimiter(int maxConcurrent = 2)
     {
         _concurrencySemaphore = new SemaphoreSlim(maxConcurrent, maxConcurrent);
     }
@@ -66,14 +70,14 @@ public class ImdbApiRateLimiter : IDisposable
             lock (_lock)
             {
                 var now = DateTimeOffset.UtcNow;
-                var windowStart = now.AddSeconds(-10);
+                var windowStart = now - Window;
 
                 while (_timestamps.Count > 0 && _timestamps.Peek() < windowStart)
                 {
                     _timestamps.Dequeue();
                 }
 
-                if (_timestamps.Count < 50)
+                if (_timestamps.Count < MaxRequestsPerWindow)
                 {
                     _timestamps.Enqueue(now);
                     return;

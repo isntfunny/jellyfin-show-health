@@ -1,6 +1,6 @@
 # Show Health
 
-Jellyfin plugin that checks your TV series library for completeness. It compares your local episodes and seasons against IMDb data and shows you what's missing.
+Jellyfin plugin that checks your TV series library for completeness. It compares your local episodes and seasons against TVmaze data and shows you what's missing.
 
 ![Show Health Dashboard](docs/screenshot.png)
 
@@ -13,6 +13,10 @@ Jellyfin plugin that checks your TV series library for completeness. It compares
 - Click any missing item to copy its name (e.g. `Breaking Bad S02E03`)
 - Smart caching: ended series cached for 1 year, running series for 7 days, auto-invalidates near release dates
 - Scheduled scan with activity log notifications (only notifies about NEW missing content)
+
+## Data source
+
+Series and episode data comes from [TVmaze](https://www.tvmaze.com/) via their free public API — no API key or account required. Data is licensed under [CC BY-SA](https://www.tvmaze.com/api#licensing).
 
 ## Installation
 
@@ -31,7 +35,7 @@ Jellyfin plugin that checks your TV series library for completeness. It compares
 
 ## Usage
 
-After installation, **Show Health** appears in the main menu. The dashboard loads your series list instantly, then analyzes each series against IMDb one by one.
+After installation, **Show Health** appears in the main menu. The dashboard loads your series list instantly, then analyzes each series against TVmaze one by one.
 
 The scheduled task **Show Health Scan** runs every 24 hours and logs new missing content to the Jellyfin activity log.
 

@@ -5,20 +5,31 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.ShowHealth.Models;
-using Jellyfin.Plugin.ShowHealth.Services.ImdbApi;
-using Jellyfin.Plugin.ShowHealth.Services.ImdbApi.Models;
 using Jellyfin.Plugin.ShowHealth.Services.Jellyfin;
+using Jellyfin.Plugin.ShowHealth.Services.TvMaze;
+using Jellyfin.Plugin.ShowHealth.Services.TvMaze.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.ShowHealth.Services;
 
 /// <summary>
-/// Compares Jellyfin library data against IMDb to find missing episodes and seasons.
+/// Compares Jellyfin library data against TVmaze to find missing episodes and seasons.
 /// </summary>
 public class ShowHealthAnalyzer
 {
+    /// <summary>
+    /// TVmaze status value for a concluded show. Every other value ("Running",
+    /// "To Be Determined", "In Development") is treated as still running.
+    /// </summary>
+    private const string TvMazeEndedStatus = "Ended";
+
+    /// <summary>
+    /// Data for ended shows is immutable — cache it for a year instead of the default 7 days.
+    /// </summary>
+    private static readonly TimeSpan EndedShowCacheTtl = TimeSpan.FromDays(365);
+
     private readonly JellyfinLibraryService _libraryService;
-    private readonly ImdbApiClient _imdbClient;
+    private readonly TvMazeClient _tvMazeClient;
     private readonly ILogger<ShowHealthAnalyzer> _logger;
 
     private Dictionary<string, JellyfinSeriesInfo>? _seriesIndexCache;
@@ -30,26 +41,26 @@ public class ShowHealthAnalyzer
     /// </summary>
     public ShowHealthAnalyzer(
         JellyfinLibraryService libraryService,
-        ImdbApiClient imdbClient,
+        TvMazeClient tvMazeClient,
         ILogger<ShowHealthAnalyzer> logger)
     {
         _libraryService = libraryService;
-        _imdbClient = imdbClient;
+        _tvMazeClient = tvMazeClient;
         _logger = logger;
     }
 
     /// <summary>
-    /// Clears all IMDb API cache entries.
+    /// Clears all TVmaze API cache entries.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task ClearCacheAsync(CancellationToken cancellationToken = default)
     {
-        await _imdbClient.ClearCacheAsync(cancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("IMDb cache cleared");
+        await _tvMazeClient.ClearCacheAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("TVmaze cache cleared");
     }
 
     /// <summary>
-    /// Returns a list of all series with IMDb IDs from Jellyfin (no IMDb calls).
+    /// Returns a list of all series with IMDb IDs from Jellyfin (no TVmaze calls).
     /// Uses the same index as AnalyzeAsync to ensure consistency.
     /// </summary>
     public SeriesListResponse GetSeriesList()
@@ -92,7 +103,7 @@ public class ShowHealthAnalyzer
     }
 
     /// <summary>
-    /// Analyzes a single series by IMDb ID against the IMDb API.
+    /// Analyzes a single series by IMDb ID against TVmaze.
     /// </summary>
     public async Task<SeriesHealthResult?> AnalyzeSeriesAsync(string imdbId, CancellationToken cancellationToken = default)
     {
@@ -160,14 +171,25 @@ public class ShowHealthAnalyzer
     {
         var imdbId = series.ImdbId!;
 
-        // Fetch title first to determine ended status, which drives the cache TTL for all subsequent calls.
-        var title = await _imdbClient.GetTitleAsync(imdbId, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var showId = await _tvMazeClient.LookupShowIdByImdbAsync(imdbId, cancellationToken).ConfigureAwait(false);
+        if (showId == null)
+        {
+            _logger.LogDebug("Skipping series {Name} — {ImdbId} is unknown to TVmaze", series.Name, imdbId);
+            return null;
+        }
 
-        // Ended series data is immutable — cache for 365 days; running series use the default 7-day TTL.
-        var isLikelyEnded = title != null && title.EndYear > 0;
-        var dataTtl = isLikelyEnded ? TimeSpan.FromDays(365) : (TimeSpan?)null;
+        // A single request returns the show plus all its seasons and episodes.
+        // Ended shows never change, so they are cached for a year instead of the default 7 days.
+        var show = await _tvMazeClient.GetShowWithEpisodesAsync(
+            showId.Value,
+            ttlSelector: s => IsEndedStatus(s.Status) ? EndedShowCacheTtl : (TimeSpan?)null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var imdbSeasons = await _imdbClient.ListTitleSeasonsAsync(imdbId, cacheTtl: dataTtl, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (show == null)
+        {
+            _logger.LogDebug("Skipping series {Name} — TVmaze returned no data for show {ShowId}", series.Name, showId.Value);
+            return null;
+        }
 
         // Load all local episodes in one query (avoids N+1 per season)
         var allLocalEpisodesBySeason = _libraryService.GetAllEpisodesForSeries(series.Id);
@@ -187,16 +209,30 @@ public class ShowHealthAnalyzer
             .Select(s => s.IndexNumber!.Value)
             .ToHashSet();
 
-        // Parse IMDb seasons with episode counts
-        var imdbSeasonEntries = imdbSeasons.Seasons
-            .Select(s => new { Num = int.TryParse(s.SeasonNumber, out var n) ? n : -1, s.EpisodeCount })
-            .Where(s => s.Num > 0)
+        // Group remote episodes by season. Episodes without a season or episode number are
+        // specials/unnumbered entries and cannot be matched against the local library.
+        var remoteEpisodesBySeason = (show.Embedded?.Episodes ?? Array.Empty<TvMazeEpisode>())
+            .Where(ep => ep.Season is > 0 && ep.Number is > 0)
+            .GroupBy(ep => ep.Season!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderBy(ep => ep.Number!.Value).ToList());
+
+        // Remote seasons with their announced episode counts. A season with neither a known
+        // episode order nor any episodes has only been announced — ignore it.
+        var remoteSeasonEntries = (show.Embedded?.Seasons ?? Array.Empty<TvMazeSeason>())
+            .Where(s => s.Number > 0)
+            .Select(s => new
+            {
+                Num = s.Number,
+                EpisodeCount = s.EpisodeOrder
+                               ?? (remoteEpisodesBySeason.TryGetValue(s.Number, out var eps) ? eps.Count : 0),
+            })
+            .Where(s => s.EpisodeCount > 0 || remoteEpisodesBySeason.ContainsKey(s.Num))
             .ToList();
 
-        var imdbSeasonNumbers = imdbSeasonEntries.Select(s => s.Num).ToList();
+        var remoteSeasonNumbers = remoteSeasonEntries.Select(s => s.Num).ToList();
 
         // Find missing seasons with their episode counts
-        var missingSeasonInfos = imdbSeasonEntries
+        var missingSeasonInfos = remoteSeasonEntries
             .Where(s => !localSeasonNumbers.Contains(s.Num))
             .Select(s => new MissingSeasonInfo { Season = s.Num, EpisodeCount = s.EpisodeCount })
             .ToList();
@@ -208,33 +244,36 @@ public class ShowHealthAnalyzer
         NextEpisodeInfo? nextEpisode = null;
         var now = DateTime.UtcNow;
 
-        foreach (var seasonNum in imdbSeasonNumbers)
+        foreach (var seasonNum in remoteSeasonNumbers)
         {
-            // EpisodeNumber == 0 means IMDb returned null — unnumbered special/clip show; skip.
-            var imdbEpisodes = (await GetAllEpisodesForSeasonAsync(imdbId, seasonNum, dataTtl, cancellationToken).ConfigureAwait(false))
-                .Where(ep => ep.EpisodeNumber != 0).ToList();
+            if (!remoteEpisodesBySeason.TryGetValue(seasonNum, out var remoteEpisodes))
+            {
+                // Announced season with an episode order but no scheduled episodes yet —
+                // nothing has aired, so it must not be reported as missing.
+                missingSeasonNumbers.Remove(seasonNum);
+                missingSeasonInfos.RemoveAll(s => s.Season == seasonNum);
+                continue;
+            }
 
             // Check for next upcoming episode (across all seasons)
-            foreach (var ep in imdbEpisodes)
+            foreach (var ep in remoteEpisodes)
             {
-                if (ep.ReleaseDate != null && IsInFuture(ep.ReleaseDate, now))
+                var airDate = ParseAirDate(ep.Airdate);
+                if (airDate == null || airDate.Value <= now)
                 {
-                    var candidate = new NextEpisodeInfo
+                    continue;
+                }
+
+                if (nextEpisode == null ||
+                    string.Compare(FormatDate(airDate.Value), nextEpisode.ReleaseDate ?? string.Empty, StringComparison.Ordinal) < 0)
+                {
+                    nextEpisode = new NextEpisodeInfo
                     {
                         Season = seasonNum,
-                        Episode = ep.EpisodeNumber,
-                        Title = ep.Title ?? "TBA",
-                        ReleaseDate = FormatDate(ep.ReleaseDate),
+                        Episode = ep.Number!.Value,
+                        Title = ep.Name ?? "TBA",
+                        ReleaseDate = FormatDate(airDate.Value),
                     };
-
-                    if (nextEpisode == null ||
-                        string.Compare(
-                            NormalizeDateForComparison(candidate.ReleaseDate),
-                            NormalizeDateForComparison(nextEpisode.ReleaseDate ?? string.Empty),
-                            StringComparison.Ordinal) < 0)
-                    {
-                        nextEpisode = candidate;
-                    }
                 }
             }
 
@@ -242,15 +281,13 @@ public class ShowHealthAnalyzer
             // but don't list individual episodes (they're implied by the season)
             if (missingSeasonNumbers.Contains(seasonNum))
             {
-                // Check if there are any confirmed aired episodes.
-                // An episode counts as "aired" only if it has a releaseDate in the past.
-                // No releaseDate = unknown = don't count as aired.
-                var hasAiredEpisodes = imdbEpisodes
-                    .Any(ep => ep.ReleaseDate != null && !IsInFutureOrCurrentYear(ep.ReleaseDate, now));
+                // An episode counts as "aired" only if its air date is in the past.
+                // No air date = unscheduled = don't count as aired.
+                var airedEpisodes = remoteEpisodes.Where(ep => HasAired(ep.Airdate, now)).ToList();
 
-                if (!hasAiredEpisodes)
+                if (airedEpisodes.Count == 0)
                 {
-                    // All episodes are future/current-year-only — don't count this season as missing
+                    // Nothing in this season has aired yet — don't count it as missing
                     missingSeasonNumbers.Remove(seasonNum);
                     missingSeasonInfos.RemoveAll(s => s.Season == seasonNum);
                 }
@@ -260,19 +297,14 @@ public class ShowHealthAnalyzer
                     var seasonInfo = missingSeasonInfos.Find(s => s.Season == seasonNum);
                     if (seasonInfo != null)
                     {
-                        foreach (var ep in imdbEpisodes)
+                        foreach (var ep in airedEpisodes)
                         {
-                            if (ep.EpisodeNumber == 0 || IsInFutureOrCurrentYear(ep.ReleaseDate, now))
-                            {
-                                continue;
-                            }
-
                             seasonInfo.Episodes.Add(new MissingEpisodeInfo
                             {
                                 Season = seasonNum,
-                                Episode = ep.EpisodeNumber,
-                                Title = ep.Title ?? "TBA",
-                                ImdbId = ep.Id,
+                                Episode = ep.Number!.Value,
+                                Title = ep.Name ?? "TBA",
+                                TvMazeId = ep.Id,
                             });
                         }
                     }
@@ -308,51 +340,41 @@ public class ShowHealthAnalyzer
                 }
             }
 
-            foreach (var ep in imdbEpisodes)
+            foreach (var ep in remoteEpisodes)
             {
-                // Skip future episodes and episodes with only a year in the current year
-                if (IsInFutureOrCurrentYear(ep.ReleaseDate, now))
+                // Skip episodes that have not aired yet or have no air date at all
+                if (!HasAired(ep.Airdate, now))
                 {
                     continue;
                 }
 
-                if (!localEpisodeNumbers.Contains(ep.EpisodeNumber))
+                if (!localEpisodeNumbers.Contains(ep.Number!.Value))
                 {
                     missingEpisodes.Add(new MissingEpisodeInfo
                     {
                         Season = seasonNum,
-                        Episode = ep.EpisodeNumber,
-                        Title = ep.Title ?? "TBA",
-                        ImdbId = ep.Id,
+                        Episode = ep.Number!.Value,
+                        Title = ep.Name ?? "TBA",
+                        TvMazeId = ep.Id,
                     });
                 }
             }
         }
 
-        // Fix 5: seasonsTotal = local seasons + confirmed missing seasons (excludes not-yet-aired)
-        // Invalidate cache for seasons with imminent releases so next scan fetches fresh data.
-        // Uses prefix match to catch all paginated cache entries for this season.
+        // Invalidate the cache for shows with an imminent release so the next scan fetches
+        // fresh data instead of serving a stale episode list.
         if (nextEpisode?.ReleaseDate != null)
         {
-            var nextDate = ParseDateString(nextEpisode.ReleaseDate);
+            var nextDate = ParseAirDate(nextEpisode.ReleaseDate);
             if (nextDate.HasValue && (nextDate.Value - now).TotalDays <= 7)
             {
-                var seasonPrefix = $"/titles/{imdbId}/episodes";
-                await _imdbClient.InvalidateCacheByPrefixAsync(seasonPrefix, cancellationToken).ConfigureAwait(false);
+                await _tvMazeClient.InvalidateCacheByPrefixAsync(TvMazeClient.ShowPath(showId.Value), cancellationToken).ConfigureAwait(false);
             }
         }
 
-        // Determine status: endYear > 0 means the series has ended,
-        // UNLESS there are episodes with a releaseDate after endYear (e.g. reboot/continuation).
-        var isEnded = title != null && title.EndYear > 0;
-        if (isEnded && nextEpisode?.ReleaseDate != null)
-        {
-            // Parse year from releaseDate string (format: "YYYY", "YYYY-MM", or "YYYY-MM-DD")
-            if (int.TryParse(nextEpisode.ReleaseDate.AsSpan(0, 4), out var nextYear) && nextYear > title!.EndYear)
-            {
-                isEnded = false;
-            }
-        }
+        var isEnded = IsEndedStatus(show.Status);
+        var startYear = ParseYear(show.Premiered) ?? series.ProductionYear ?? 0;
+        var endYear = isEnded ? ParseYear(show.Ended) : null;
 
         var status = isEnded ? ShowStatus.Ended : ShowStatus.Running;
 
@@ -383,13 +405,14 @@ public class ShowHealthAnalyzer
             Name = series.Name,
             JellyfinId = series.Id.ToString("N"),
             ImdbId = imdbId,
+            TvMazeId = showId.Value,
             TvdbId = series.TvdbId,
             Genres = series.Genres,
             Studios = series.Studios,
             CommunityRating = series.CommunityRating,
             Overview = series.Overview,
-            StartYear = title?.StartYear ?? series.ProductionYear ?? 0,
-            EndYear = isEnded ? title!.EndYear : null,
+            StartYear = startYear,
+            EndYear = endYear,
             Status = status,
             SeasonsLocal = localSeasonNumbers.Count,
             MissingSeasons = missingSeasonInfos,
@@ -398,59 +421,34 @@ public class ShowHealthAnalyzer
         };
     }
 
-    private async Task<List<Episode>> GetAllEpisodesForSeasonAsync(
-        string imdbId,
-        int seasonNum,
-        TimeSpan? cacheTtl,
-        CancellationToken cancellationToken)
+    private static bool IsEndedStatus(string? status)
     {
-        var allEpisodes = new List<Episode>();
-        string? pageToken = null;
-
-        do
-        {
-            var response = await _imdbClient.ListTitleEpisodesAsync(
-                imdbId,
-                season: seasonNum.ToString(CultureInfo.InvariantCulture),
-                pageSize: 50,
-                pageToken: pageToken,
-                cacheTtl: cacheTtl,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            allEpisodes.AddRange(response.Episodes);
-            pageToken = response.NextPageToken;
-        }
-        while (!string.IsNullOrEmpty(pageToken));
-
-        return allEpisodes;
+        return string.Equals(status, TvMazeEndedStatus, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// Pads partial date strings to YYYY-MM-DD for correct lexicographic comparison.
+    /// Returns true if the episode aired in the past.
+    /// Episodes without an air date are unscheduled and never count as aired — reporting them
+    /// as missing would produce false positives for announced-but-unreleased content.
     /// </summary>
-    private static string NormalizeDateForComparison(string date)
+    private static bool HasAired(string? airDate, DateTime now)
     {
-        return date.Length switch
-        {
-            4 => date + "-01-01",   // YYYY -> YYYY-01-01
-            7 => date + "-01",      // YYYY-MM -> YYYY-MM-01
-            _ => date,              // YYYY-MM-DD already, or empty
-        };
+        var parsed = ParseAirDate(airDate);
+        return parsed.HasValue && parsed.Value <= now;
     }
 
     /// <summary>
-    /// Parses a formatted date string (YYYY, YYYY-MM, or YYYY-MM-DD) into a DateTime.
-    /// Returns null if the string cannot be parsed.
+    /// Parses a TVmaze date string (YYYY-MM-DD) into a UTC <see cref="DateTime"/>.
+    /// Returns null for null, empty, or malformed values.
     /// </summary>
-    private static DateTime? ParseDateString(string? dateStr)
+    private static DateTime? ParseAirDate(string? date)
     {
-        if (string.IsNullOrEmpty(dateStr))
+        if (string.IsNullOrEmpty(date))
         {
             return null;
         }
 
-        var normalized = NormalizeDateForComparison(dateStr);
-        if (DateTime.TryParseExact(normalized, "yyyy-MM-dd", CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result))
+        if (DateTime.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var result))
         {
             return DateTime.SpecifyKind(result, DateTimeKind.Utc);
         }
@@ -458,65 +456,14 @@ public class ShowHealthAnalyzer
         return null;
     }
 
-    /// <summary>
-    /// Returns true if the episode has not yet aired:
-    /// - releaseDate is in the future, OR
-    /// - releaseDate has only a year (no month/day) and that year is the current year or later.
-    /// Episodes with only a year should not be counted as missing for the entire year.
-    /// </summary>
-    private static bool IsInFutureOrCurrentYear(PrecisionDate? date, DateTime now)
+    private static int? ParseYear(string? date)
     {
-        if (date == null || date.Year == 0)
-        {
-            return false;
-        }
-
-        // Only a year, no month/day — treat as "not yet aired" for the entire year
-        if (date.Month == 0 && date.Day == 0)
-        {
-            return date.Year >= now.Year;
-        }
-
-        return IsInFuture(date, now);
+        var parsed = ParseAirDate(date);
+        return parsed?.Year;
     }
 
-    private static bool IsInFuture(PrecisionDate date, DateTime now)
+    private static string FormatDate(DateTime date)
     {
-        if (date.Year == 0)
-        {
-            return false;
-        }
-
-        var month = date.Month > 0 ? date.Month : 12;
-
-        // Fix 6: when the day is unknown, use the last day of the month so that an episode with
-        // only a month/year is considered "not yet aired" for the entire month (conservative default).
-        var day = date.Day > 0 ? date.Day : DateTime.DaysInMonth(date.Year, month);
-
-        var releaseDate = new DateTime(
-            date.Year,
-            month,
-            day,
-            0,
-            0,
-            0,
-            DateTimeKind.Utc);
-
-        return releaseDate > now;
-    }
-
-    private static string FormatDate(PrecisionDate date)
-    {
-        if (date.Day > 0 && date.Month > 0)
-        {
-            return $"{date.Year:D4}-{date.Month:D2}-{date.Day:D2}";
-        }
-
-        if (date.Month > 0)
-        {
-            return $"{date.Year:D4}-{date.Month:D2}";
-        }
-
-        return date.Year.ToString(CultureInfo.InvariantCulture);
+        return date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 }

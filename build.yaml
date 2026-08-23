@@ -7,7 +7,7 @@ framework: "net9.0"
 overview: "TV series completeness checker — find missing episodes and seasons"
 description: >
   Jellyfin plugin that checks your TV series library for completeness.
-  Compares local episodes and seasons against IMDb data and reports what is missing.
+  Compares local episodes and seasons against TVmaze data and reports what is missing.
 category: "General"
 owner: "IsntFunny"
 artifacts:

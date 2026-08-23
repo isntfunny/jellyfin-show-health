@@ -7,14 +7,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Jellyfin.Plugin.ShowHealth.Services.ImdbApi;
+namespace Jellyfin.Plugin.ShowHealth.Services.TvMaze;
 
 /// <summary>
-/// Persistent file-based cache for IMDb API responses.
+/// Persistent file-based cache for TVmaze API responses.
 /// Cache entries expire after 7 days.
 /// Per-key locking avoids serialising unrelated concurrent requests.
 /// </summary>
-public class ImdbApiCache : IDisposable
+public class TvMazeCache : IDisposable
 {
     private const string CacheExtension = ".json";
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromDays(7);
@@ -29,11 +29,11 @@ public class ImdbApiCache : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="ImdbApiCache"/> class.
+    /// Initializes a new instance of the <see cref="TvMazeCache"/> class.
     /// </summary>
     /// <param name="cacheDir">Directory to store cache files.</param>
     /// <param name="ttl">Time-to-live for cache entries (default: 7 days).</param>
-    public ImdbApiCache(string cacheDir, TimeSpan? ttl = null)
+    public TvMazeCache(string cacheDir, TimeSpan? ttl = null)
     {
         _cacheDir = cacheDir;
         _ttl = ttl ?? DefaultTtl;
