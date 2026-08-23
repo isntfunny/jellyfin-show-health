@@ -1,7 +1,7 @@
 ---
 name: "Show Health"
 guid: "2626c821-e54b-488a-b316-ea9c5f95e24f"
-version: "1.3.1.0"
+version: "1.4.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "TV series completeness checker — find missing episodes and seasons"
@@ -13,7 +13,9 @@ owner: "IsntFunny"
 artifacts:
 - "Jellyfin.Plugin.ShowHealth.dll"
 changelog: >
-  Fix: scan task no longer sends push messages to active sessions, which was
-  crashing playback on Android TV clients. Notifications still appear in the
-  Jellyfin activity log via the standard mechanism. Add tvdbId, genres,
-  studios, communityRating, and overview to the series API response.
+  The IMDb API this plugin relied on (api.imdbapi.dev) has shut down. Series
+  and episode data now comes from TVmaze — free, no API key, and matched via
+  the IMDb IDs your library already has. Scans are also faster: one request
+  per series instead of one per season. Episodes without a known air date are
+  no longer reported as missing, and announced seasons with nothing aired yet
+  are ignored. The cached IMDb data is discarded automatically on first start.
